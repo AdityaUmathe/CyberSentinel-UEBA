@@ -1,0 +1,275 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# CyberSentinel UEBA Engine — Configuration (164.52.194.98)
+# ueba_config.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Paths ─────────────────────────────────────────────────────────────────────
+paths:
+  enriched_input:       "/root/NEW_DRIVE/aditya_ueba/enriched.jsonl"
+  ueba_output:          "/root/NEW_DRIVE/aditya_ueba/ueba_alerts.jsonl"
+  training_data:        "/root/NEW_DRIVE/aditya_ueba/data/combined_training.jsonl"
+  features_h5:          "/root/NEW_DRIVE/aditya_ueba/data/features.h5"
+  profile_db:           "profiles/user_profiles.db"
+  models_dir:           "models/"
+  isolation_forest:     "models/isolation_forest.pkl"
+  scaler:               "models/scaler.pkl"
+  autoencoder_dir:      "models/autoencoders/"
+  global_autoencoder:   "models/autoencoders/global.pt"
+  faiss_index:          "vector_db/faiss.index"
+  faiss_metadata:       "vector_db/metadata.jsonl"
+  state_file:           ".state/ueba.state"
+  log_file:             "logs/ueba_engine.log"
+  trainer_log:          "logs/ueba_trainer.log"
+  preprocessor_log:     "logs/ueba_preprocessor.log"
+
+
+# ── Preprocessing ─────────────────────────────────────────────────────────────
+preprocessing:
+  chunk_size: 50000
+  min_events_per_user: 100
+
+  feature_fields:
+    temporal:
+      - "enrich.temporal.hour"
+      - "enrich.temporal.day_of_week"
+      - "enrich.temporal.is_weekend"
+      - "enrich.temporal.is_business_hours"
+      - "enrich.temporal.is_night_shift"
+
+    flags:
+      - "enrich.flags.is_auth_event"
+      - "enrich.flags.is_network_event"
+      - "enrich.flags.is_file_event"
+      - "enrich.flags.is_process_event"
+
+    anomalies:
+      - "enrich.anomalies.is_brute_force"
+      - "enrich.anomalies.is_port_scan"
+      - "enrich.anomalies.is_tor"
+      - "enrich.anomalies.is_malicious_ip"
+      - "enrich.anomalies.is_impossible_travel"
+      - "enrich.anomalies.is_lateral_movement"
+      - "enrich.anomalies.is_data_exfiltration"
+      - "enrich.anomalies.is_after_hours"
+      - "enrich.anomalies.is_high_frequency"
+
+    counters:
+      - "enrich.counters.src_ip_5m"
+      - "enrich.counters.src_ip_1h"
+      - "enrich.counters.user_1h"
+      - "enrich.counters.host_1h"
+
+    behavioral:
+      - "enrich.behavioral.unique_destinations_1h"
+      - "enrich.behavioral.unique_ports_1h"
+      - "enrich.behavioral.recent_failures_5m"
+
+    geo:
+      - "enrich.geo.distance_km"
+      - "enrich.geo.cross_border"
+      - "enrich.geo.cross_continent"
+
+    risk:
+      - "enrich.risk_score"
+      - "rule.level"
+
+    network:
+      - "enrich.network_intel.is_cloud_provider"
+
+    categorical:
+      event_category:
+        field: "event_category"
+        mapping:
+          auth:     0
+          network:  1
+          process:  2
+          file:     3
+          dns:      4
+          web:      5
+          malware:  6
+          cloud:    7
+          policy:   8
+          system:   9
+          unknown:  10
+
+      event_outcome:
+        field: "event_outcome"
+        mapping:
+          success:  0
+          failure:  1
+          unknown:  2
+
+      traffic_direction:
+        field: "enrich.classification.traffic_direction"
+        mapping:
+          inbound:   0
+          outbound:  1
+          internal:  2
+          unknown:   3
+
+  feature_dim: 35
+  null_fill_value: 0.0
+
+
+# ── Isolation Forest ──────────────────────────────────────────────────────────
+isolation_forest:
+  contamination: 0.005
+  n_estimators: 200
+  max_samples: "auto"
+  n_jobs: -1
+  random_state: 42
+  training_sample_size: 500000
+
+  thresholds:
+    suspicious:       -0.50
+    anomalous:        -0.55
+    highly_anomalous: -0.60
+
+
+# ── Autoencoder ───────────────────────────────────────────────────────────────
+autoencoder:
+  architecture:
+    input_dim:   35
+    hidden_dims: [24, 12]
+    activation:  "relu"
+    dropout:     0.1
+
+  training:
+    epochs:           30
+    batch_size:       512
+    learning_rate:    0.001
+    weight_decay:     0.0001
+    val_split:        0.2
+    early_stopping_patience: 5
+    scheduler_step:   10
+    scheduler_gamma:  0.5
+
+  threshold_percentile: 95
+  device: "cuda"
+  num_workers: 4
+
+
+# ── HDBSCAN Clusterer ─────────────────────────────────────────────────────────
+clusterer:
+  min_cluster_size: 5
+  min_samples: 3
+  metric: "euclidean"
+  run_interval_seconds: 300
+  buffer_size: 1000
+  min_persistence: 0.3
+
+
+# ── Score Fusion ──────────────────────────────────────────────────────────────
+score_fusion:
+  isolation_forest_weight: 0.5
+  autoencoder_weight: 0.5
+
+  alert_threshold: 0.75
+
+  verdicts:
+    - min: 0.75
+      max: 0.85
+      label: "suspicious"
+      confidence: "low"
+    - min: 0.85
+      max: 0.93
+      label: "anomalous"
+      confidence: "medium"
+    - min: 0.93
+      max: 1.00
+      label: "highly_anomalous"
+      confidence: "high"
+
+
+# ── RAG (Semantic Retrieval) ──────────────────────────────────────────────────
+rag:
+  top_k: 5
+  min_similarity: 0.60
+  max_index_size: 7000000
+
+  embedding_fields:
+    - "event_category"
+    - "event_outcome"
+    - "enrich.temporal.hour"
+    - "enrich.temporal.is_business_hours"
+    - "enrich.anomalies.is_brute_force"
+    - "enrich.anomalies.is_impossible_travel"
+    - "enrich.anomalies.is_tor"
+    - "enrich.risk_score"
+    - "enrich.geo.cross_continent"
+
+
+# ── User Profile Store (SQLite) ───────────────────────────────────────────────
+profile_store:
+  baseline_window_days: 30
+  update_interval_seconds: 60
+  tracked_fields:
+    - typical_hours
+    - typical_countries
+    - avg_risk_score
+    - avg_events_per_hour
+    - typical_agents
+    - first_seen
+    - last_seen
+    - total_events
+
+
+# ── Streaming Engine ──────────────────────────────────────────────────────────
+streaming:
+  poll_interval_ms: 100
+  state_save_interval: 1000
+  max_partial_buffer_bytes: 1048576
+  max_loaded_user_models: 100
+
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+logging:
+  level: "INFO"
+  max_bytes: 10485760
+  backup_count: 5
+  format: "%(asctime)s  %(levelname)-8s  %(name)-20s  %(message)s"
+
+
+# ── Output ────────────────────────────────────────────────────────────────────
+output:
+  pretty_print: false
+  include_feature_vector: false
+  include_raw_scores: true
+  preserve_original: "all"
+
+
+# ── Noise Suppression ─────────────────────────────────────────────────────────
+noise_suppression:
+  signature_ids:
+    - "113202"   # MikroTik: L2TP tunnel authenticated (normal VPN login)
+    - "81619"    # Fortigate: Multiple high traffic events from same source
+    - "81633"    # Fortigate: Multiple IDS events from same source
+    - "81634"    # Fortigate: Multiple IDS events from same destination
+    - "81644"    # Fortigate: Multiple policy violations from same source
+    - "81620"    # Fortigate: Multiple high traffic events from same destination
+    - "81621"    # Fortigate: Multiple high traffic events to same port
+    - "60107"    # Failed attempt to perform a privileged operation (chrome.exe SocSRV_15)
+  suppress_zero_risk_network: true
+  suppress_ipv6_multicast: true
+  suppress_source_ips:
+    - "164.52.194.98"   # engine server — reverse tunnel + rsync traffic
+  suppress_hostnames_as_users:
+    - "cybersentinel-manager"
+    - "cybersentinel-manage"
+    - "Centos7Trial"
+
+
+# ── Identity Resolution ───────────────────────────────────────────────────────
+identity_resolution:
+  enabled: true
+  mappings:
+    # RootSeeker / Sujal — same person, 3 different formats
+    "RootSeeker":                  "RootSeeker\\Sujal"
+    "sujalthakur2003@outl":        "RootSeeker\\Sujal"
+
+    # LAPTOP-08MIT8SI — truncated vs full username
+    "LAPTOP-08MIT8SI":             "LAPTOP-08MIT8SI\\Asus"
+    "LAPTOP-08MIT8SI\\Asu":        "LAPTOP-08MIT8SI\\Asus"
+
+    # cybersentinel-manager — truncated hostname
+    "cybersentinel-manage":        "cybersentinel-manager"

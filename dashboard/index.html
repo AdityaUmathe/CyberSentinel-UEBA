@@ -1,0 +1,1585 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CyberSentinel UEBA</title>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:        #060a0e;
+    --bg2:       #0b1118;
+    --bg3:       #0f1720;
+    --border:    #1a2838;
+    --border2:   #1f3248;
+    --accent:    #00d4ff;
+    --accent2:   #0099bb;
+    --red:       #ff3b5c;
+    --orange:    #ff8c42;
+    --yellow:    #ffd166;
+    --green:     #06d6a0;
+    --purple:    #9b5de5;
+    --cyan:      #00d4ff;
+    --text:      #c8d8e8;
+    --text2:     #7a9ab5;
+    --text3:     #3d5a72;
+    --mono:      'Share Tech Mono', monospace;
+    --mono2:     'JetBrains Mono', monospace;
+    --sans:      'Inter', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 13px;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Animated grid background */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(0,212,255,0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,212,255,0.025) 1px, transparent 1px);
+    background-size: 48px 48px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* Scanline effect */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg, transparent, transparent 2px,
+      rgba(0,0,0,0.04) 2px, rgba(0,0,0,0.04) 4px
+    );
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  /* ── Header ── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 24px;
+    height: 56px;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(90deg, rgba(6,10,14,0.98) 0%, rgba(11,17,24,0.98) 50%, rgba(6,10,14,0.98) 100%);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    backdrop-filter: blur(12px);
+  }
+
+  /* animated left border on header */
+  header::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 3px;
+    background: linear-gradient(180deg, transparent, var(--accent), transparent);
+    animation: header-scan 3s ease-in-out infinite;
+  }
+  @keyframes header-scan {
+    0%, 100% { opacity: 0.3; transform: scaleY(0.5); }
+    50%       { opacity: 1;   transform: scaleY(1); }
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .logo-icon {
+    width: 34px; height: 34px;
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 0 12px rgba(0,212,255,0.2), inset 0 0 12px rgba(0,212,255,0.05);
+  }
+
+  .logo-icon::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, rgba(0,212,255,0.2), transparent);
+  }
+
+  .logo-icon svg { position: relative; z-index: 1; }
+
+  .logo-text {
+    font-family: var(--mono);
+    font-size: 17px;
+    letter-spacing: 3px;
+    color: #fff;
+    text-shadow: 0 0 20px rgba(0,212,255,0.4);
+  }
+
+  .logo-sub {
+    font-family: var(--mono2);
+    font-size: 9px;
+    color: var(--accent);
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    opacity: 0.7;
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  /* ── Threat ticker ── */
+  .threat-ticker {
+    font-family: var(--mono2);
+    font-size: 10px;
+    color: var(--text3);
+    padding: 4px 12px;
+    border: 1px solid var(--border2);
+    border-radius: 3px;
+    background: var(--bg3);
+    white-space: nowrap;
+    overflow: hidden;
+    width: 260px;
+    position: relative;
+  }
+  .threat-ticker::before {
+    content: '◈ LIVE';
+    color: var(--red);
+    margin-right: 8px;
+    animation: blink 1.2s step-start infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+  .ticker-inner {
+    display: inline-block;
+    animation: ticker-scroll 20s linear infinite;
+    white-space: nowrap;
+  }
+  @keyframes ticker-scroll {
+    0%   { transform: translateX(0); }
+    100% { transform: translateX(-50%); }
+  }
+
+  #refresh-btn {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 1.5px;
+    padding: 5px 14px;
+    border-radius: 3px;
+    cursor: pointer;
+    border: 1px solid var(--accent2);
+    color: var(--accent);
+    background: rgba(0,212,255,0.06);
+    transition: all 0.2s;
+  }
+  #refresh-btn:hover {
+    background: rgba(0,212,255,0.12);
+    box-shadow: 0 0 12px rgba(0,212,255,0.2);
+  }
+
+  .status-pill {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--mono2);
+    font-size: 10px;
+    color: var(--green);
+    padding: 4px 10px;
+    border: 1px solid rgba(6,214,160,0.3);
+    border-radius: 20px;
+    background: rgba(6,214,160,0.05);
+  }
+
+  .status-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--green);
+    animation: pulse-green 2s infinite;
+  }
+
+  @keyframes pulse-green {
+    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(6,214,160,0.5); }
+    50%       { opacity: 0.7; box-shadow: 0 0 0 5px rgba(6,214,160,0); }
+  }
+
+  .last-update { font-family: var(--mono2); font-size: 10px; color: var(--text3); }
+
+  /* ── Nav ── */
+  nav {
+    display: flex;
+    gap: 0;
+    padding: 0 24px;
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    position: relative;
+    z-index: 10;
+  }
+
+  .tab {
+    padding: 10px 20px;
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--text3);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+    user-select: none;
+  }
+  .tab:hover { color: var(--text2); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); text-shadow: 0 0 10px rgba(0,212,255,0.4); }
+
+  .tl-nav-bar {
+    display: flex; align-items: center; gap: 6px;
+    margin-left: auto; padding: 0 8px;
+  }
+  .tl-label { font-family: var(--mono2); font-size: 10px; color: var(--text3); letter-spacing: 1.5px; margin-right: 4px; }
+  .tl-btn {
+    font-family: var(--mono2); font-size: 10px; font-weight: 600;
+    padding: 3px 10px; border-radius: 3px; cursor: pointer;
+    border: 1px solid var(--border2); color: var(--text3);
+    background: transparent; transition: all 0.15s; letter-spacing: 0.5px;
+  }
+  .tl-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .tl-btn.active { background: rgba(0,212,255,0.1); border-color: var(--accent); color: var(--accent); }
+  .tl-showing { font-family: var(--mono2); font-size: 10px; color: var(--text3); margin-left: 8px; }
+
+  /* ── Main ── */
+  main { padding: 20px 24px; position: relative; z-index: 1; }
+
+  /* ── Stat Cards ── */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr) 1.5fr;
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+
+  .stat-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px 18px;
+    position: relative;
+    overflow: hidden;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+    cursor: pointer;
+  }
+
+  .stat-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+  }
+
+  /* Corner decoration */
+  .stat-card::after {
+    content: '';
+    position: absolute;
+    bottom: 0; right: 0;
+    width: 28px; height: 28px;
+    border-top: 1px solid;
+    border-left: 1px solid;
+    opacity: 0.15;
+    border-radius: 4px 0 0 0;
+    transform: translate(2px, 2px);
+  }
+
+  .stat-card.red::before   { background: linear-gradient(90deg, var(--red), transparent); }
+  .stat-card.orange::before { background: linear-gradient(90deg, var(--orange), transparent); }
+  .stat-card.yellow::before { background: linear-gradient(90deg, var(--yellow), transparent); }
+  .stat-card.blue::before  { background: linear-gradient(90deg, var(--accent), transparent); }
+  .stat-card.purple::before { background: linear-gradient(90deg, var(--purple), transparent); }
+
+  .stat-card.red::after    { border-color: var(--red); }
+  .stat-card.orange::after  { border-color: var(--orange); }
+  .stat-card.yellow::after  { border-color: var(--yellow); }
+  .stat-card.blue::after   { border-color: var(--accent); }
+  .stat-card.purple::after  { border-color: var(--purple); }
+
+  .stat-card:hover { transform: translateY(-3px); border-color: var(--border2); }
+  .stat-card.red:hover    { box-shadow: 0 8px 32px rgba(255,59,92,0.15); }
+  .stat-card.orange:hover  { box-shadow: 0 8px 32px rgba(255,140,66,0.12); }
+  .stat-card.yellow:hover  { box-shadow: 0 8px 32px rgba(255,209,102,0.1); }
+  .stat-card.blue:hover   { box-shadow: 0 8px 32px rgba(0,212,255,0.12); }
+  .stat-card.purple:hover  { box-shadow: 0 8px 32px rgba(155,93,229,0.12); }
+
+  .stat-label {
+    font-family: var(--mono2);
+    font-size: 9px;
+    color: var(--text3);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+
+  .stat-value {
+    font-family: var(--mono);
+    font-size: 38px;
+    font-weight: 400;
+    line-height: 1;
+    margin-bottom: 6px;
+    transition: text-shadow 0.3s;
+  }
+
+  .stat-card.red    .stat-value { color: var(--red);    }
+  .stat-card.orange .stat-value { color: var(--orange); }
+  .stat-card.yellow .stat-value { color: var(--yellow); }
+  .stat-card.blue   .stat-value { color: var(--accent); }
+  .stat-card.purple .stat-value { color: var(--purple); font-size: 20px; margin-bottom: 12px; }
+
+  .stat-card.red:hover    .stat-value { text-shadow: 0 0 20px rgba(255,59,92,0.6); }
+  .stat-card.orange:hover .stat-value { text-shadow: 0 0 20px rgba(255,140,66,0.5); }
+  .stat-card.yellow:hover .stat-value { text-shadow: 0 0 20px rgba(255,209,102,0.4); }
+  .stat-card.blue:hover   .stat-value { text-shadow: 0 0 20px rgba(0,212,255,0.5); }
+
+  .stat-sub { font-size: 11px; color: var(--text3); }
+
+  /* Reasons */
+  .reasons-list { margin-top: 4px; }
+  .reason-row { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+  .reason-label { font-family: var(--mono2); font-size: 10px; color: var(--text2); width: 190px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
+  .reason-bar-wrap { flex: 1; height: 3px; background: var(--bg3); border-radius: 2px; overflow: hidden; }
+  .reason-bar { height: 100%; border-radius: 2px; background: linear-gradient(90deg, var(--accent), var(--purple)); transition: width 0.6s ease; }
+  .reason-count { font-family: var(--mono2); font-size: 10px; color: var(--text3); width: 36px; text-align: right; }
+
+  /* ── Pages ── */
+  .page { display: none; }
+  .page.active { display: block; animation: page-enter 0.2s ease; }
+  @keyframes page-enter {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ── Panel ── */
+  .panel {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+
+  .panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 11px 16px;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(90deg, rgba(15,23,32,0.9), rgba(11,17,24,0.7));
+  }
+
+  .panel-title {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 2.5px;
+    text-transform: uppercase;
+    color: var(--text2);
+  }
+
+  .panel-badge {
+    font-family: var(--mono2);
+    font-size: 10px;
+    color: var(--accent);
+    background: rgba(0,212,255,0.08);
+    border: 1px solid rgba(0,212,255,0.2);
+    padding: 2px 8px;
+    border-radius: 10px;
+  }
+
+  /* ── Feed Filters ── */
+  .feed-filters {
+    display: flex; gap: 8px; padding: 10px 16px;
+    border-bottom: 1px solid var(--border); background: var(--bg2); flex-wrap: wrap;
+  }
+  .filter-btn {
+    font-family: var(--mono2); font-size: 10px; padding: 4px 10px;
+    border-radius: 3px; cursor: pointer; border: 1px solid var(--border2);
+    color: var(--text3); background: transparent; transition: all 0.15s; letter-spacing: 0.5px;
+  }
+  .filter-btn:hover { border-color: var(--accent); color: var(--accent); transform: translateY(-1px); }
+  .filter-btn.active { background: rgba(0,212,255,0.1); border-color: var(--accent); color: var(--accent); }
+  .filter-btn.f-red.active    { background: rgba(255,59,92,0.1); border-color: var(--red); color: var(--red); }
+  .filter-btn.f-orange.active { background: rgba(255,140,66,0.1); border-color: var(--orange); color: var(--orange); }
+  .filter-btn.f-yellow.active { background: rgba(255,209,102,0.1); border-color: var(--yellow); color: var(--yellow); }
+
+  /* ── Table ── */
+  .feed-table-wrap { overflow-y: auto; max-height: 560px; }
+  table { width: 100%; border-collapse: collapse; }
+  thead th {
+    font-family: var(--mono2); font-size: 9px; letter-spacing: 1.5px;
+    text-transform: uppercase; color: var(--text3); padding: 8px 12px;
+    text-align: left; border-bottom: 1px solid var(--border);
+    background: var(--bg3); position: sticky; top: 0; z-index: 10;
+  }
+  tbody tr {
+    border-bottom: 1px solid rgba(26,40,56,0.6);
+    transition: background 0.1s;
+  }
+  tbody tr:hover { background: rgba(0,212,255,0.03); }
+  tbody td { padding: 7px 12px; vertical-align: middle; }
+
+  /* ── Row highlight animation (for jump-to) ── */
+  @keyframes row-highlight {
+    0%   { background: rgba(0,212,255,0.18); box-shadow: inset 3px 0 0 var(--accent); }
+    60%  { background: rgba(0,212,255,0.08); box-shadow: inset 3px 0 0 var(--accent); }
+    100% { background: transparent; box-shadow: none; }
+  }
+  tr.jump-highlight { animation: row-highlight 2s ease forwards; }
+
+  /* ── Overview rows — clickable style ── */
+  .ov-row {
+    cursor: pointer;
+    transition: background 0.1s, padding-left 0.1s;
+  }
+  .ov-row:hover { background: rgba(0,212,255,0.05) !important; }
+  .ov-row td:first-child { position: relative; }
+  .ov-row td:first-child::before {
+    content: '→';
+    position: absolute;
+    left: 4px;
+    color: var(--accent);
+    opacity: 0;
+    font-size: 10px;
+    transition: opacity 0.15s;
+  }
+  .ov-row:hover td:first-child::before { opacity: 0.6; }
+
+  /* ── Verdicts ── */
+  .verdict-badge {
+    font-family: var(--mono2); font-size: 9px; padding: 2px 7px;
+    border-radius: 2px; white-space: nowrap; font-weight: 600; letter-spacing: 0.5px;
+  }
+  .v-highly_anomalous {
+    background: rgba(255,59,92,0.12); color: var(--red); border: 1px solid rgba(255,59,92,0.3);
+    animation: badge-pulse 2.5s infinite;
+  }
+  @keyframes badge-pulse {
+    0%,100% { box-shadow: 0 0 0 0 rgba(255,59,92,0.3); }
+    50%      { box-shadow: 0 0 0 3px rgba(255,59,92,0); }
+  }
+  .v-anomalous  { background: rgba(255,140,66,0.12); color: var(--orange); border: 1px solid rgba(255,140,66,0.3); }
+  .v-suspicious { background: rgba(255,209,102,0.1);  color: var(--yellow); border: 1px solid rgba(255,209,102,0.25); }
+
+  .score-bar { display: flex; align-items: center; gap: 6px; }
+  .score-num { font-family: var(--mono2); font-size: 11px; width: 36px; }
+  .score-track { width: 46px; height: 3px; background: var(--bg3); border-radius: 2px; overflow: hidden; }
+  .score-fill { height: 100%; border-radius: 2px; box-shadow: 0 0 4px currentColor; opacity: 0.85; }
+
+  .user-cell { font-family: var(--mono2); font-size: 11px; color: var(--accent); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sig-cell  { color: var(--text2); font-size: 11px; max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .host-cell { font-family: var(--mono2); font-size: 10px; color: var(--text3); }
+  .time-cell { font-family: var(--mono2); font-size: 10px; color: var(--text3); white-space: nowrap; }
+
+  .reason-tag {
+    display: inline-block; font-family: var(--mono2); font-size: 9px;
+    padding: 1px 5px; border-radius: 2px; background: rgba(0,212,255,0.06);
+    color: var(--accent2); border: 1px solid rgba(0,212,255,0.12); margin: 1px; white-space: nowrap;
+  }
+  .reason-tag.r-brute   { background: rgba(255,59,92,0.07);  color: #ff6b85; border-color: rgba(255,59,92,0.18); }
+  .reason-tag.r-lateral { background: rgba(155,93,229,0.08); color: #b57aef; border-color: rgba(155,93,229,0.2); }
+  .reason-tag.r-exfil   { background: rgba(255,140,66,0.08); color: #ffaa70; border-color: rgba(255,140,66,0.2); }
+
+  .camp-tag {
+    font-family: var(--mono2); font-size: 9px; color: var(--purple);
+    background: rgba(155,93,229,0.08); border: 1px solid rgba(155,93,229,0.2);
+    padding: 1px 5px; border-radius: 2px;
+  }
+
+  /* ── Evidence ── */
+  .ev-panel-row td { padding: 0 !important; }
+  .ev-panel {
+    background: #070b12;
+    border-top: 1px solid var(--border);
+    border-bottom: 2px solid var(--purple);
+    padding: 16px 20px;
+    animation: slideDown 0.15s ease;
+  }
+  @keyframes slideDown {
+    from { opacity: 0; transform: translateY(-4px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .ev-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; }
+  @media (max-width: 1400px) { .ev-grid { grid-template-columns: repeat(2, 1fr); } }
+  .ev-section { min-width: 0; }
+  .ev-section-title { font-family: var(--mono); font-size: 10px; color: var(--purple); text-transform: uppercase; letter-spacing: 2px; margin-bottom: 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  .ev-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.025); }
+  .ev-row-block { flex-direction: column; gap: 4px; }
+  .ev-label { font-family: var(--mono2); font-size: 10px; color: var(--text3); white-space: nowrap; flex-shrink: 0; }
+  .ev-val   { font-family: var(--mono2); font-size: 10px; color: var(--text2); text-align: right; word-break: break-word; }
+  .ev-highlight { color: var(--red) !important; font-weight: 600; }
+  .ev-divider { border-top: 1px solid var(--border); margin: 8px 0; }
+  .ev-note { font-size: 10px; color: var(--yellow); margin-bottom: 8px; font-style: italic; }
+  .ev-empty { font-size: 11px; color: var(--text3); padding: 12px; font-style: italic; }
+  .ev-privs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+  .priv-tag { font-family: var(--mono2); font-size: 9px; background: rgba(108,92,231,0.12); color: var(--purple); border: 1px solid rgba(108,92,231,0.25); border-radius: 3px; padding: 2px 5px; }
+  .mitre-tag { font-family: var(--mono2); font-size: 9px; background: rgba(255,59,92,0.08); color: var(--red); border: 1px solid rgba(255,59,92,0.2); border-radius: 3px; padding: 2px 5px; margin-right: 3px; display: inline-block; margin-bottom: 2px; }
+  .mitre-tech { background: rgba(253,203,110,0.08); color: var(--yellow); border-color: rgba(253,203,110,0.2); }
+  .mitre-id   { background: rgba(0,210,211,0.08); color: var(--cyan); border-color: rgba(0,210,211,0.2); }
+
+  /* ── User leaderboard ── */
+  .leaderboard { padding: 0; }
+  .user-row { display: grid; grid-template-columns: 24px 1fr 80px 80px 80px 160px 120px; align-items: center; padding: 10px 16px; border-bottom: 1px solid rgba(26,40,56,0.6); transition: background 0.1s; gap: 12px; }
+  .user-row:hover { background: rgba(255,255,255,0.02); }
+  .user-row.header-row { background: var(--bg3); border-bottom: 1px solid var(--border); padding: 8px 16px; }
+  .user-row.header-row span { font-family: var(--mono2); font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--text3); }
+  .rank-num { font-family: var(--mono2); font-size: 11px; color: var(--text3); text-align: center; }
+  .rank-num.top1 { color: var(--red); font-weight: 700; }
+  .rank-num.top3 { color: var(--orange); }
+  .rank-num.top5 { color: var(--yellow); }
+  .user-name { font-family: var(--mono2); font-size: 12px; color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .risk-index-cell { display: flex; align-items: center; gap: 6px; }
+  .risk-index-val  { font-family: var(--mono); font-size: 15px; min-width: 36px; }
+  .count-val    { font-family: var(--mono2); font-size: 12px; color: var(--text2); }
+  .max-score-val{ font-family: var(--mono2); font-size: 11px; }
+  .top-reason-val{ font-family: var(--mono2); font-size: 10px; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .last-seen-val { font-family: var(--mono2); font-size: 10px; color: var(--text3); }
+
+  /* ── Compact user row ── */
+  .user-row-compact { display: flex; align-items: center; justify-content: space-between; padding: 8px 14px; border-bottom: 1px solid rgba(26,40,56,0.5); gap: 8px; transition: background 0.1s, padding-left 0.15s; }
+  .user-row-compact:hover { background: rgba(0,212,255,0.04); padding-left: 18px; }
+  .urc-rank  { font-family: var(--mono2); font-size: 10px; color: var(--text3); width: 16px; text-align: center; flex-shrink: 0; }
+  .urc-rank.top1 { color: var(--red); font-weight: 700; }
+  .urc-rank.top3 { color: var(--orange); }
+  .urc-name  { font-family: var(--mono2); font-size: 11px; color: var(--accent); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .urc-score { font-family: var(--mono); font-size: 14px; flex-shrink: 0; }
+  .urc-count { font-family: var(--mono2); font-size: 10px; color: var(--text3); flex-shrink: 0; width: 52px; text-align: right; }
+
+  /* ── Campaigns ── */
+  .campaign-card { margin: 12px 16px; background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; transition: border-color 0.2s; }
+  .campaign-card:hover { border-color: var(--border2); }
+  .campaign-header { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-bottom: 1px solid var(--border); cursor: pointer; }
+  .campaign-id { font-family: var(--mono); font-size: 13px; color: var(--purple); }
+  .campaign-meta { display: flex; gap: 16px; align-items: center; }
+  .campaign-meta span { font-family: var(--mono2); font-size: 10px; color: var(--text3); }
+  .campaign-body { padding: 12px 14px; }
+  .campaign-users { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .user-chip { font-family: var(--mono2); font-size: 10px; color: var(--accent); background: rgba(0,212,255,0.06); border: 1px solid rgba(0,212,255,0.15); padding: 2px 8px; border-radius: 3px; }
+  .host-chip { font-family: var(--mono2); font-size: 10px; color: var(--text2); background: rgba(255,255,255,0.03); border: 1px solid var(--border); padding: 2px 8px; border-radius: 3px; }
+  .campaign-timeline { display: flex; align-items: flex-end; gap: 2px; height: 40px; margin-top: 10px; }
+  .timeline-bar { flex: 1; border-radius: 2px 2px 0 0; min-height: 3px; transition: opacity 0.2s; }
+  .timeline-bar:hover { opacity: 0.7; }
+  .sig-item { font-size: 11px; color: var(--text2); padding: 2px 0; border-bottom: 1px solid rgba(26,40,56,0.4); }
+
+  /* ── Agents ── */
+  .agent-item { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-bottom: 1px solid rgba(26,40,56,0.5); cursor: pointer; transition: background 0.1s, padding-left 0.12s; gap: 8px; }
+  .agent-item:hover { background: rgba(0,212,255,0.04); padding-left: 18px; }
+  .agent-item.active { background: rgba(0,212,255,0.07); border-left: 2px solid var(--accent); }
+  .agent-name { font-family: var(--mono2); font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .agent-item.has-critical .agent-name { color: var(--red); }
+  .agent-item.has-anomalous .agent-name { color: var(--orange); }
+  .agent-alert-count { font-family: var(--mono2); font-size: 10px; padding: 1px 6px; border-radius: 10px; background: rgba(0,212,255,0.08); color: var(--accent); border: 1px solid rgba(0,212,255,0.18); white-space: nowrap; flex-shrink: 0; }
+  .agent-alert-count.cnt-red    { background: rgba(255,59,92,0.1);  color: var(--red);    border-color: rgba(255,59,92,0.25); }
+  .agent-alert-count.cnt-orange { background: rgba(255,140,66,0.08); color: var(--orange); border-color: rgba(255,140,66,0.2); }
+  .agent-ip { font-family: var(--mono2); font-size: 9px; color: var(--text3); }
+  .agent-summary { padding: 14px 16px; border-bottom: 1px solid var(--border); display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; background: var(--bg3); }
+  .agent-stat { text-align: center; }
+  .agent-stat-val { font-family: var(--mono); font-size: 22px; font-weight: 400; line-height: 1; }
+  .agent-stat-lbl { font-family: var(--mono2); font-size: 9px; color: var(--text3); text-transform: uppercase; letter-spacing: 1px; margin-top: 3px; }
+  .agent-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); background: var(--bg3); }
+  .agent-tab { padding: 9px 20px; font-family: var(--mono2); font-size: 10px; font-weight: 600; letter-spacing: 1.5px; color: var(--text3); cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s; user-select: none; }
+  .agent-tab:hover { color: var(--text); }
+  .agent-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .ep-chart-card { background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; padding: 14px; transition: border-color 0.2s, box-shadow 0.2s; }
+  .ep-chart-card:hover { border-color: var(--border2); box-shadow: 0 4px 16px rgba(0,0,0,0.2); }
+  .ep-chart-title { font-family: var(--mono2); font-size: 9px; color: var(--text3); text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 10px; }
+
+  /* ── Empty / Loading ── */
+  .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 60px 20px; color: var(--text3); gap: 12px; }
+  .empty-state svg { opacity: 0.3; }
+  .empty-state p { font-family: var(--mono2); font-size: 12px; letter-spacing: 1px; }
+  .loading { display: flex; align-items: center; justify-content: center; padding: 40px; font-family: var(--mono2); font-size: 12px; color: var(--text3); gap: 10px; }
+  .spinner { width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Toast ── */
+  #toast-container { position: fixed; bottom: 24px; right: 24px; display: flex; flex-direction: column-reverse; gap: 8px; z-index: 9999; pointer-events: none; }
+  .toast { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-radius: 4px; font-family: var(--mono2); font-size: 11px; background: var(--bg2); border: 1px solid var(--border2); box-shadow: 0 8px 32px rgba(0,0,0,0.5); animation: toast-in 0.3s ease, toast-out 0.3s ease 2.7s forwards; pointer-events: auto; min-width: 220px; }
+  @keyframes toast-in  { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
+  @keyframes toast-out { from { opacity:1; } to { opacity:0; transform:translateY(12px); } }
+  .toast.success { border-color:rgba(6,214,160,0.4); color:var(--green); }
+  .toast.warning { border-color:rgba(255,209,102,0.4); color:var(--yellow); }
+  .toast.error   { border-color:rgba(255,59,92,0.4);  color:var(--red); }
+  .toast.info    { border-color:rgba(0,212,255,0.4);  color:var(--accent); }
+
+  /* ── Skeleton ── */
+  @keyframes shimmer { 0% { background-position: -400px 0; } 100% { background-position: 400px 0; } }
+  .skeleton { background: linear-gradient(90deg, var(--bg3) 25%, #1a2535 50%, var(--bg3) 75%); background-size: 800px 100%; animation: shimmer 1.4s infinite linear; border-radius: 4px; }
+  .skeleton-line { height: 12px; margin-bottom: 8px; }
+  .skeleton-line.short { width: 40%; }
+  .skeleton-line.medium { width: 65%; }
+  .skeleton-line.full { width: 100%; }
+  .skeleton-box { height: 48px; width: 100%; }
+
+  /* ── Scrollbar ── */
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+  * { scrollbar-width: thin; scrollbar-color: var(--border2) transparent; }
+
+  @media (max-width: 1200px) { .stats-grid { grid-template-columns: repeat(2, 1fr); } }
+</style>
+</head>
+<body>
+<div id="toast-container"></div>
+
+<header>
+  <div class="logo">
+    <div class="logo-icon">
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+        <path d="M9 1L2 4.5V9C2 12.5 5 15.7 9 17C13 15.7 16 12.5 16 9V4.5L9 1Z" stroke="#00d4ff" stroke-width="1.5" fill="none"/>
+        <circle cx="9" cy="9" r="2.5" fill="#00d4ff" opacity="0.8"/>
+        <path d="M9 6V4M9 14v-2M6 9H4M14 9h-2" stroke="#00d4ff" stroke-width="1" opacity="0.5"/>
+      </svg>
+    </div>
+    <div>
+      <div class="logo-text">CYBERSENTINEL</div>
+      <div class="logo-sub">UEBA · Behavioral Analytics</div>
+    </div>
+  </div>
+  <div class="header-right">
+    <div class="threat-ticker">
+      <span class="ticker-inner" id="ticker-text">Initializing threat feed...</span>
+    </div>
+    <button id="refresh-btn" onclick="manualRefresh()">⟳ REFRESH</button>
+    <div class="status-pill">
+      <div class="status-dot"></div>
+      <span>ENGINE LIVE</span>
+    </div>
+    <div class="last-update" id="last-update">Not loaded yet</div>
+  </div>
+</header>
+
+<nav>
+  <div class="tab active" data-tab="overview">Overview</div>
+  <div class="tab" data-tab="feed">Alert Feed</div>
+  <div class="tab" data-tab="users">User Risk</div>
+  <div class="tab" data-tab="campaigns">Campaigns</div>
+  <div class="tab" data-tab="endpoints">Endpoints</div>
+  <div class="tl-nav-bar">
+    <span class="tl-label">WINDOW</span>
+    <button class="tl-btn" data-hours="24">24H</button>
+    <button class="tl-btn" data-hours="72">3D</button>
+    <button class="tl-btn" data-hours="168">7D</button>
+    <button class="tl-btn" data-hours="720">30D</button>
+    <button class="tl-btn" data-hours="1440">60D</button>
+    <button class="tl-btn" data-hours="2160">90D</button>
+    <button class="tl-btn active" data-hours="0">ALL</button>
+    <span class="tl-showing" id="tl-showing"></span>
+  </div>
+</nav>
+
+<main>
+
+  <!-- OVERVIEW -->
+  <div class="page active" id="page-overview">
+    <div class="stats-grid" id="stats-grid">
+      <div class="stat-card red">
+        <div class="stat-label">Highly Anomalous</div>
+        <div class="stat-value" id="s-highly">—</div>
+        <div class="stat-sub">critical threats</div>
+      </div>
+      <div class="stat-card orange">
+        <div class="stat-label">Anomalous</div>
+        <div class="stat-value" id="s-anomalous">—</div>
+        <div class="stat-sub">high risk events</div>
+      </div>
+      <div class="stat-card yellow">
+        <div class="stat-label">Suspicious</div>
+        <div class="stat-value" id="s-suspicious">—</div>
+        <div class="stat-sub">medium risk events</div>
+      </div>
+      <div class="stat-card blue">
+        <div class="stat-label">Total Alerts</div>
+        <div class="stat-value" id="s-total">—</div>
+        <div class="stat-sub" id="s-1h">— in last hour</div>
+      </div>
+      <div class="stat-card purple">
+        <div class="stat-label">Top Anomaly Reasons</div>
+        <div class="stat-value" id="s-users">—</div>
+        <div class="reasons-list" id="reasons-list"></div>
+      </div>
+    </div>
+
+    <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px;">
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">Recent Alerts</span>
+          <span style="font-family:var(--mono2);font-size:9px;color:var(--text3);letter-spacing:1px">CLICK TO INVESTIGATE →</span>
+          <span class="panel-badge" id="ov-badge">0</span>
+        </div>
+        <div class="feed-table-wrap" style="max-height:340px;">
+          <table id="overview-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>User</th>
+                <th>Verdict</th>
+                <th>Score</th>
+                <th>Signature</th>
+              </tr>
+            </thead>
+            <tbody id="overview-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">Top Risk Users</span>
+        </div>
+        <div id="overview-users"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">Endpoints</span>
+          <span class="panel-badge" id="ov-agents-badge">0</span>
+        </div>
+        <div id="overview-agents" style="max-height:340px;overflow-y:auto;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FEED -->
+  <div class="page" id="page-feed">
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">Live Alert Feed</span>
+        <span class="panel-badge" id="feed-badge">0</span>
+      </div>
+      <div class="feed-filters">
+        <button class="filter-btn active" data-filter="all">ALL</button>
+        <button class="filter-btn f-red" data-filter="highly_anomalous">HIGHLY ANOMALOUS</button>
+        <button class="filter-btn f-orange" data-filter="anomalous">ANOMALOUS</button>
+        <button class="filter-btn f-yellow" data-filter="suspicious">SUSPICIOUS</button>
+      </div>
+      <div class="feed-table-wrap">
+        <table id="feed-table">
+          <thead>
+            <tr>
+              <th>Time</th><th>User</th><th>Host</th><th>Verdict</th>
+              <th>Score</th><th>Reasons</th><th>Campaign</th><th>Signature</th>
+            </tr>
+          </thead>
+          <tbody id="feed-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- USERS -->
+  <div class="page" id="page-users">
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">User Risk Leaderboard</span>
+        <span class="panel-badge" id="users-badge">0</span>
+      </div>
+      <div class="leaderboard">
+        <div class="user-row header-row">
+          <span>#</span><span>User</span><span>Risk Index</span>
+          <span>Alerts</span><span>Max Score</span><span>Top Reason</span><span>Last Seen</span>
+        </div>
+        <div id="users-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CAMPAIGNS -->
+  <div class="page" id="page-campaigns">
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">Campaign Timeline</span>
+        <span class="panel-badge" id="camp-badge">0</span>
+      </div>
+      <div id="campaigns-list"></div>
+    </div>
+  </div>
+
+  <!-- ENDPOINTS -->
+  <div class="page" id="page-endpoints">
+    <div style="display:grid;grid-template-columns:280px 1fr;gap:12px;min-height:600px;">
+      <div class="panel" style="align-self:start;">
+        <div class="panel-header">
+          <span class="panel-title">Endpoints</span>
+          <span class="panel-badge" id="agents-badge">0</span>
+        </div>
+        <div id="agents-list" style="max-height:700px;overflow-y:auto;"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title" id="agent-detail-title">SELECT AN ENDPOINT</span>
+          <span class="panel-badge" id="agent-detail-badge" style="display:none">0</span>
+        </div>
+        <div id="agent-detail-body">
+          <div class="empty-state">
+            <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+              <rect x="8" y="12" width="32" height="24" rx="3" stroke="#3d5a72" stroke-width="1.5" fill="none"/>
+              <path d="M16 36v4M32 36v4M12 40h24" stroke="#3d5a72" stroke-width="1.5" stroke-linecap="round"/>
+              <circle cx="24" cy="24" r="5" stroke="#3d5a72" stroke-width="1.5" fill="none"/>
+            </svg>
+            <p>Click an endpoint to view its alerts</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<script>
+const API = '';
+let feedFilter = 'all';
+let feedData = [], usersData = [], campaignsData = [], agentsData = [];
+let selectedAgent = null;
+let timelineHours = 0;
+let allFeedData = [], allUsersData = [], allAgentsData = [];
+
+// ── Ticker ────────────────────────────────────────────────────────────────────
+function updateTicker(alerts) {
+  if (!alerts || !alerts.length) return;
+  const top = alerts.slice(0, 8).map(a =>
+    `${a.user||'unknown'} · ${(a.signature||'').slice(0,40)} · ${(a.verdict||'').replace(/_/g,' ').toUpperCase()}`
+  ).join('   ⬥   ');
+  const el = document.getElementById('ticker-text');
+  if (el) el.textContent = top + '   ⬥   ' + top;
+}
+
+// ── Tab navigation ────────────────────────────────────────────────────────────
+document.querySelectorAll('.tab').forEach(t => {
+  t.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+    document.querySelectorAll('.page').forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    document.getElementById('page-' + t.dataset.tab).classList.add('active');
+  });
+});
+
+// ── Timeline filter ───────────────────────────────────────────────────────────
+document.querySelectorAll('.tl-btn').forEach(b => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('.tl-btn').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    timelineHours = parseInt(b.dataset.hours);
+    applyTimelineFilter();
+  });
+});
+
+// ── Feed filters ──────────────────────────────────────────────────────────────
+document.querySelectorAll('.filter-btn').forEach(b => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('.filter-btn').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    feedFilter = b.dataset.filter;
+    renderFeed();
+  });
+});
+
+function applyTimelineFilter() {
+  const hours = timelineHours;
+  const label = {0:'ALL TIME',24:'LAST 24H',72:'LAST 3 DAYS',168:'LAST 7 DAYS',720:'LAST 30 DAYS',1440:'LAST 60 DAYS',2160:'LAST 90 DAYS'}[hours]||'';
+  document.getElementById('tl-showing').textContent = label;
+
+  if (hours === 0) {
+    feedData = allFeedData; usersData = allUsersData; agentsData = allAgentsData;
+  } else {
+    const cutoff = new Date(Date.now() - hours * 3600000);
+    feedData = allFeedData.filter(a => { try { return new Date(a.processed_at||a.event_time) >= cutoff; } catch { return true; } });
+    const uMap = {};
+    feedData.forEach(a => {
+      const u = a.user||'unknown';
+      if (!uMap[u]) uMap[u] = {user:u,alert_count:0,max_score:0,verdicts:{},hosts:[],top_reason:'',last_seen:'',risk_index:0};
+      uMap[u].alert_count++;
+      uMap[u].max_score = Math.max(uMap[u].max_score, a.score||0);
+      if (a.host && !uMap[u].hosts.includes(a.host)) uMap[u].hosts.push(a.host);
+      if (!uMap[u].last_seen || a.processed_at > uMap[u].last_seen) uMap[u].last_seen = a.processed_at;
+      const v = a.verdict||''; uMap[u].verdicts[v] = (uMap[u].verdicts[v]||0)+1;
+      if (a.reasons&&a.reasons[0]) uMap[u].top_reason = a.reasons[0];
+    });
+    usersData = Object.values(uMap).map(u => {
+      const ha = u.verdicts['highly_anomalous']||0;
+      u.risk_index = parseFloat((u.max_score*0.5 + (u.alert_count/100)*0.3 + (ha/Math.max(u.alert_count,1))*0.2).toFixed(3));
+      u.top_verdict = Object.entries(u.verdicts).sort((a,b)=>b[1]-a[1])[0]?.[0]||'';
+      u.highly_anomalous = ha; return u;
+    }).filter(u=>u.user!=='unknown').sort((a,b)=>b.risk_index-a.risk_index);
+    const aMap = {};
+    feedData.forEach(a => {
+      const h = a.host||''; if (!h) return;
+      if (!aMap[h]) aMap[h] = {agent:h,ip:a.host_ip||'',alert_count:0,max_score:0,highly_anomalous:0,anomalous:0,suspicious:0,last_seen:''};
+      aMap[h].alert_count++; aMap[h].max_score = Math.max(aMap[h].max_score, a.score||0);
+      if (a.verdict==='highly_anomalous') aMap[h].highly_anomalous++;
+      else if (a.verdict==='anomalous') aMap[h].anomalous++;
+      else if (a.verdict==='suspicious') aMap[h].suspicious++;
+      if (!aMap[h].last_seen || a.processed_at > aMap[h].last_seen) aMap[h].last_seen = a.processed_at;
+    });
+    agentsData = Object.values(aMap).sort((a,b)=>b.highly_anomalous-a.highly_anomalous||b.max_score-a.max_score);
+  }
+  renderFeed(); renderUsers(); renderOverviewUsers(); renderAgents(); renderOverviewAgents();
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function fmtTime(iso) {
+  if (!iso) return '—';
+  try { return new Date(iso).toLocaleTimeString('en-IN', {hour:'2-digit',minute:'2-digit',second:'2-digit'}); }
+  catch { return iso.slice(11,19); }
+}
+function fmtDate(iso) {
+  if (!iso) return '—';
+  try { const d=new Date(iso); return d.toLocaleDateString('en-IN',{day:'2-digit',month:'short'})+' '+d.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}); }
+  catch { return iso.slice(0,16); }
+}
+function scoreColor(s) {
+  if (s>=0.9) return 'var(--red)';
+  if (s>=0.8) return 'var(--orange)';
+  return 'var(--yellow)';
+}
+function verdictClass(v) { return 'v-'+(v||'').replace(/ /g,'_'); }
+function verdictLabel(v) { return {highly_anomalous:'CRITICAL',anomalous:'ANOMALOUS',suspicious:'SUSPICIOUS'}[v]||(v||'').toUpperCase()||'—'; }
+function reasonTag(r) {
+  let cls = '';
+  if (r.includes('brute'))   cls='r-brute';
+  if (r.includes('lateral')) cls='r-lateral';
+  if (r.includes('exfil'))   cls='r-exfil';
+  return `<span class="reason-tag ${cls}">${r.replace(/_/g,' ').replace('behavioral baseline deviation','baseline dev').replace('isolation forest','IF')}</span>`;
+}
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+function showToast(msg, type='info', duration=3000) {
+  const icons = {info:'ℹ',success:'✓',warning:'⚠',error:'✕'};
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.innerHTML = `<span>${icons[type]||'ℹ'}</span><span>${msg}</span>`;
+  document.getElementById('toast-container').appendChild(el);
+  setTimeout(() => el.remove(), duration);
+}
+
+// ── Skeleton ──────────────────────────────────────────────────────────────────
+function showSkeletons() {
+  const skels = `<div style="padding:16px;display:flex;flex-direction:column;gap:8px">
+    <div class="skeleton skeleton-line medium"></div>
+    <div class="skeleton skeleton-line full"></div>
+    <div class="skeleton skeleton-line short"></div>
+    <div class="skeleton skeleton-box" style="margin-top:4px"></div>
+    <div class="skeleton skeleton-line full"></div>
+    <div class="skeleton skeleton-line medium"></div>
+  </div>`;
+  ['overview-tbody','feed-tbody','users-list','campaigns-list'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el && !el.innerHTML.trim()) el.innerHTML = skels;
+  });
+}
+
+// ── KEY FEATURE: Jump to alert from overview ──────────────────────────────────
+function jumpToAlert(alertId, verdict) {
+  // 1. Switch to feed tab
+  document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+  document.querySelectorAll('.page').forEach(x => x.classList.remove('active'));
+  document.querySelector('.tab[data-tab="feed"]').classList.add('active');
+  document.getElementById('page-feed').classList.add('active');
+
+  // 2. Set feed filter to match verdict
+  feedFilter = verdict || 'all';
+  document.querySelectorAll('.filter-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.filter === feedFilter || (feedFilter !== 'all' && b.dataset.filter === 'all' && feedFilter === 'all'));
+  });
+  // If verdict filter exists use it, else show all
+  const hasFilter = ['highly_anomalous','anomalous','suspicious'].includes(feedFilter);
+  document.querySelectorAll('.filter-btn').forEach(b => {
+    b.classList.remove('active');
+    if (hasFilter && b.dataset.filter === feedFilter) b.classList.add('active');
+    if (!hasFilter && b.dataset.filter === 'all') b.classList.add('active');
+  });
+
+  // 3. Re-render feed with correct filter
+  renderFeed();
+
+  // 4. Find the row and scroll + expand after a tick
+  requestAnimationFrame(() => {
+    setTimeout(() => {
+      const row = document.querySelector(`tr[data-id="${CSS.escape(alertId)}"]`);
+      if (!row) {
+        // Row not in current filter — reset to ALL and retry
+        feedFilter = 'all';
+        document.querySelectorAll('.filter-btn').forEach(b => b.classList.toggle('active', b.dataset.filter === 'all'));
+        renderFeed();
+        requestAnimationFrame(() => {
+          setTimeout(() => {
+            const r2 = document.querySelector(`tr[data-id="${CSS.escape(alertId)}"]`);
+            if (r2) { scrollAndExpand(r2, alertId); }
+          }, 60);
+        });
+        return;
+      }
+      scrollAndExpand(row, alertId);
+    }, 80);
+  });
+}
+
+function scrollAndExpand(row, alertId) {
+  // Scroll into view
+  row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+  // Highlight animation
+  row.classList.remove('jump-highlight');
+  void row.offsetWidth; // force reflow
+  row.classList.add('jump-highlight');
+  setTimeout(() => row.classList.remove('jump-highlight'), 2200);
+
+  // Expand evidence panel if not already open
+  const evRow = document.getElementById('ev-' + alertId);
+  if (evRow && !expandedRows.has(alertId)) {
+    evRow.style.display = 'table-row';
+    expandedRows.add(alertId);
+    const btn = row.querySelector('.ev-toggle');
+    if (btn) btn.textContent = '▼';
+  }
+}
+
+// ── Fetch ─────────────────────────────────────────────────────────────────────
+async function fetchAll() {
+  const [stats,feed,users,camps,agents] = await Promise.all([
+    fetch('/api/stats').then(r=>r.json()),
+    fetch('/api/feed').then(r=>r.json()),
+    fetch('/api/users').then(r=>r.json()),
+    fetch('/api/campaigns').then(r=>r.json()),
+    fetch('/api/agents').then(r=>r.json()),
+  ]);
+  feedData=feed; usersData=users; campaignsData=camps; agentsData=agents;
+  allFeedData=feed; allUsersData=users; allAgentsData=agents;
+  renderStats(stats);
+  applyTimelineFilter();
+  renderCampaigns();
+  updateTicker(feed);
+  if (selectedAgent) { const found=agentsData.find(a=>a.agent===selectedAgent); if (found) loadAgentDetail(selectedAgent); }
+  document.getElementById('last-update').textContent = 'Updated '+new Date().toLocaleTimeString('en-IN');
+  document.querySelector('.status-dot').style.background='var(--green)';
+  document.querySelector('.status-pill').style.color='var(--green)';
+  document.querySelector('.status-pill span').textContent='ENGINE LIVE';
+}
+
+async function manualRefresh() {
+  const btn = document.getElementById('refresh-btn');
+  btn.textContent='⟳ LOADING...'; btn.style.opacity='0.6'; btn.style.pointerEvents='none';
+  try {
+    await fetchAll();
+    showToast('Dashboard refreshed', 'success');
+  } catch(e) {
+    document.querySelector('.status-dot').style.background='var(--red)';
+    document.querySelector('.status-pill').style.color='var(--red)';
+    document.querySelector('.status-pill span').textContent='OFFLINE';
+    document.getElementById('last-update').textContent='Connection error';
+    showToast('Connection failed — engine offline?', 'error');
+  }
+  btn.textContent='⟳ REFRESH'; btn.style.opacity='1'; btn.style.pointerEvents='auto';
+}
+
+// ── Stats ─────────────────────────────────────────────────────────────────────
+function renderStats(s) {
+  document.getElementById('s-highly').textContent    = s.highly_anomalous?.toLocaleString()||'0';
+  document.getElementById('s-anomalous').textContent = s.anomalous?.toLocaleString()||'0';
+  document.getElementById('s-suspicious').textContent= s.suspicious?.toLocaleString()||'0';
+  document.getElementById('s-total').textContent     = s.total_alerts?.toLocaleString()||'0';
+  document.getElementById('s-1h').textContent        = `${s.alert_rate_1h||0} in last hour`;
+  document.getElementById('s-users').textContent     = `${s.unique_users||0} users`;
+  const maxC = s.top_reasons?.[0]?.count||1;
+  document.getElementById('reasons-list').innerHTML=(s.top_reasons||[]).map(r=>`
+    <div class="reason-row">
+      <div class="reason-label">${r.reason.replace(/_/g,' ')}</div>
+      <div class="reason-bar-wrap"><div class="reason-bar" style="width:${Math.round(r.count/maxC*100)}%"></div></div>
+      <div class="reason-count">${r.count}</div>
+    </div>`).join('');
+  const cardMap = {'s-highly':'highly_anomalous','s-anomalous':'anomalous','s-suspicious':'suspicious','s-total':'all'};
+  Object.entries(cardMap).forEach(([elId,filter]) => {
+    const card = document.getElementById(elId)?.closest('.stat-card');
+    if (card) { card.style.cursor='pointer'; card.onclick=()=>goToFeedWithFilter(filter); }
+  });
+}
+
+// ── Evidence ──────────────────────────────────────────────────────────────────
+function evRow(label,value,highlight) {
+  if (value===null||value===undefined||value==='') return '';
+  const val=Array.isArray(value)?value.join(', '):value;
+  return `<div class="ev-row"><span class="ev-label">${label}</span><span class="${highlight?'ev-val ev-highlight':'ev-val'}">${val}</span></div>`;
+}
+
+function buildEvidencePanel(ev, alertId, colSpan) {
+  colSpan = colSpan || 9;
+  if (!ev||!Object.keys(ev).length) return `<tr class="ev-panel-row" id="ev-${alertId}"><td colspan="${colSpan}"><div class="ev-empty">No evidence data — restart engine to generate evidence.</div></td></tr>`;
+  const sig=ev.signature||{},raw=ev.raw_event||{},base=ev.baseline||{},hist=ev.history||{};
+  const mitreIds=(sig.mitre_ids||[]).map(t=>`<span class="mitre-tag mitre-id">${t}</span>`).join('');
+  const mitreTactics=(sig.mitre_tactics||[]).map(t=>`<span class="mitre-tag">${t}</span>`).join('');
+  const mitreTechs=(sig.mitre_techniques||[]).map(t=>`<span class="mitre-tag mitre-tech">${t}</span>`).join('');
+  const privs=raw.privileges?raw.privileges.map(p=>`<span class="priv-tag">${p}</span>`).join(''):null;
+  const errH=base.error_vs_threshold&&parseFloat(base.error_vs_threshold)>5;
+  return `<tr class="ev-panel-row" id="ev-${alertId}">
+    <td colspan="${colSpan}">
+      <div class="ev-panel">
+        <div class="ev-grid">
+          <div class="ev-section">
+            <div class="ev-section-title">◈ Signature &amp; Rule</div>
+            ${evRow('Rule ID',sig.rule_id)}${evRow('Description',sig.description)}${evRow('Severity',sig.severity_level)}
+            ${sig.mitre_ids?.length?`<div class="ev-row"><span class="ev-label">MITRE ATT&CK</span><span class="ev-val">${mitreIds}</span></div>`:''}
+            ${sig.mitre_tactics?.length?`<div class="ev-row"><span class="ev-label">Tactics</span><span class="ev-val">${mitreTactics}</span></div>`:''}
+            ${sig.mitre_techniques?.length?`<div class="ev-row"><span class="ev-label">Techniques</span><span class="ev-val">${mitreTechs}</span></div>`:''}
+          </div>
+          <div class="ev-section">
+            <div class="ev-section-title">◈ Raw Event Details</div>
+            ${evRow('Category',raw.event_category)}${evRow('Outcome',raw.event_outcome)}
+            ${evRow('Host',raw.host)}${evRow('Host IP',raw.host_ip)}${evRow('Source IP',raw.source_ip)}
+            ${evRow('Process',raw.process_name)}${evRow('Logon Type',raw.logon_type)}
+            ${evRow('Windows Event ID',raw.event_id_windows)}
+            ${raw.failures_5m?evRow('Failures (5m)',raw.failures_5m,raw.failures_5m>50):''}
+            ${raw.user_events_5m?evRow('User Events (5m)',raw.user_events_5m,raw.user_events_5m>500):''}
+            ${raw.unique_dests_1h?evRow('Unique Dests (1h)',raw.unique_dests_1h,raw.unique_dests_1h>10):''}
+            ${raw.is_tor?evRow('TOR Exit Node','⚠ YES',true):''}
+            ${raw.threat_detected?evRow('Threat Intel','⚠ MATCH',true):''}
+            ${privs?`<div class="ev-row ev-row-block"><span class="ev-label">Privileges</span><div class="ev-privs">${privs}</div></div>`:''}
+          </div>
+          <div class="ev-section">
+            <div class="ev-section-title">◈ Baseline vs Now</div>
+            ${base.note?`<div class="ev-note">${base.note}</div>`:''}
+            ${evRow('Typical Hour',base.typical_hour)}${evRow('Current Hour',base.current_hour)}
+            ${evRow('Hour Deviation',base.hour_deviation)}
+            ${evRow('Typical Risk Score',base.typical_risk_score)}${evRow('Current Risk Score',base.current_risk_score)}
+            ${evRow('Risk Deviation',base.risk_deviation,parseFloat(base.risk_deviation||0)>20)}
+            ${evRow('Event Rate',base.events_multiplier,(base.events_multiplier||'').includes('x')&&parseFloat(base.events_multiplier)>3)}
+            ${evRow('Business Hours',base.is_business_hours?'Yes':'No')}${evRow('Day',base.day_of_week)}
+            <div class="ev-divider"></div>
+            ${evRow('AE Recon Error',base.autoencoder_error)}${evRow('AE Threshold',base.autoencoder_threshold)}
+            ${evRow('Error vs Threshold',base.error_vs_threshold,errH)}
+            ${evRow('Model Used',base.model_used)}${evRow('IF Raw Score',base.if_raw_score)}
+          </div>
+          <div class="ev-section">
+            <div class="ev-section-title">◈ Historical Context</div>
+            ${evRow('First Seen',hist.first_seen?hist.first_seen.replace('T',' ').slice(0,19)+' UTC':'First time')}
+            ${evRow('Last Seen',hist.last_seen?hist.last_seen.replace('T',' ').slice(0,19)+' UTC':'—')}
+            ${evRow('Total Events Seen',hist.total_events_seen?.toLocaleString())}
+            ${evRow('Alerts Today',hist.alerts_today,hist.alerts_today>10)}
+            <div class="ev-divider"></div>
+            <div class="ev-label" style="margin-bottom:6px">Anomaly Reasons</div>
+            <div>${(hist.anomaly_reasons||[]).map(r=>`<span class="reason-tag">${r.replace(/_/g,' ')}</span>`).join('')}</div>
+            ${hist.campaign_id?evRow('Campaign',hist.campaign_id):''}
+          </div>
+        </div>
+      </div>
+    </td>
+  </tr>`;
+}
+
+const expandedRows = new Set();
+function toggleEvidence(alertId) {
+  const row=document.getElementById('ev-'+alertId);
+  if (!row) return;
+  if (expandedRows.has(alertId)) {
+    row.style.display='none'; expandedRows.delete(alertId);
+    const btn=document.querySelector(`tr[data-id="${alertId}"] .ev-toggle`);
+    if (btn) btn.textContent='▶';
+  } else {
+    row.style.display='table-row'; expandedRows.add(alertId);
+    const btn=document.querySelector(`tr[data-id="${alertId}"] .ev-toggle`);
+    if (btn) btn.textContent='▼';
+  }
+}
+
+function feedRows(alerts, colSpan, idPrefix) {
+  idPrefix = idPrefix || '';
+  const rows = [];
+  alerts.forEach(a => {
+    const alertId = idPrefix+(a.event_id||(a.processed_at+a.user));
+    rows.push(`
+      <tr class="feed-row" data-id="${alertId}" style="cursor:pointer">
+        <td class="time-cell"><span class="ev-toggle" style="color:var(--text3);margin-right:6px;font-size:10px">▶</span>${fmtTime(a.processed_at)}</td>
+        <td class="user-cell">${a.user||'—'}</td>
+        ${colSpan>7?`<td class="host-cell">${a.host||'—'}</td>`:''}
+        <td><span class="verdict-badge ${verdictClass(a.verdict)}">${verdictLabel(a.verdict)}</span></td>
+        <td><div class="score-bar"><span class="score-num" style="color:${scoreColor(a.score)}">${(a.score||0).toFixed(3)}</span><div class="score-track"><div class="score-fill" style="width:${Math.round((a.score||0)*100)}%;background:${scoreColor(a.score)}"></div></div></div></td>
+        <td>${(a.reasons||[]).map(reasonTag).join('')}</td>
+        <td>${a.campaign_id?`<span class="camp-tag">${a.campaign_id}</span>`:'—'}</td>
+        <td class="sig-cell">${a.signature||'—'}</td>
+      </tr>`);
+    rows.push(buildEvidencePanel(a.evidence, alertId, colSpan));
+  });
+  return rows.join('');
+}
+
+// ── Render Feed ───────────────────────────────────────────────────────────────
+function renderFeed() {
+  const filtered = feedFilter==='all' ? feedData : feedData.filter(a=>a.verdict===feedFilter);
+  document.getElementById('feed-badge').textContent = filtered.length;
+  document.getElementById('ov-badge').textContent   = feedData.length;
+
+  // ── Overview table — NOW CLICKABLE ────────────────────────────────────────
+  document.getElementById('overview-tbody').innerHTML = feedData.slice(0,20).map(a => {
+    const alertId = a.event_id||(a.processed_at+a.user);
+    return `<tr class="ov-row" onclick="jumpToAlert('${alertId}','${a.verdict||''}')">
+      <td class="time-cell" style="padding-left:16px">${fmtTime(a.processed_at)}</td>
+      <td class="user-cell">${a.user||'—'}</td>
+      <td><span class="verdict-badge ${verdictClass(a.verdict)}">${verdictLabel(a.verdict)}</span></td>
+      <td><div class="score-bar"><span class="score-num" style="color:${scoreColor(a.score)}">${(a.score||0).toFixed(3)}</span><div class="score-track"><div class="score-fill" style="width:${Math.round((a.score||0)*100)}%;background:${scoreColor(a.score)}"></div></div></div></td>
+      <td class="sig-cell">${a.signature||'—'}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="5" class="loading">No alerts yet</td></tr>';
+
+  if (!filtered.length) {
+    document.getElementById('feed-tbody').innerHTML='<tr><td colspan="9"><div class="empty-state"><p>NO ALERTS MATCHING FILTER</p></div></td></tr>';
+    return;
+  }
+  document.getElementById('feed-tbody').innerHTML = feedRows(filtered, 9);
+  filtered.forEach(a => {
+    const id = a.event_id||(a.processed_at+a.user);
+    const el = document.getElementById('ev-'+id);
+    if (el && !expandedRows.has(id)) el.style.display='none';
+  });
+}
+
+// ── Render Users ──────────────────────────────────────────────────────────────
+function renderUsers() {
+  document.getElementById('users-badge').textContent = usersData.length;
+  if (!usersData.length) { document.getElementById('users-list').innerHTML='<div class="empty-state"><p>NO USER DATA</p></div>'; return; }
+  document.getElementById('users-list').innerHTML = usersData.map((u,i) => {
+    const rankCls = i===0?'top1':i<3?'top3':i<5?'top5':'';
+    const riColor = u.risk_index>0.7?'var(--red)':u.risk_index>0.5?'var(--orange)':'var(--yellow)';
+    return `<div class="user-row">
+      <div class="rank-num ${rankCls}">${i+1}</div>
+      <div class="user-name">${u.user}</div>
+      <div class="risk-index-cell"><span class="risk-index-val" style="color:${riColor}">${u.risk_index.toFixed(3)}</span></div>
+      <div class="count-val">${u.alert_count}</div>
+      <div class="max-score-val" style="color:${scoreColor(u.max_score)}">${u.max_score.toFixed(3)}</div>
+      <div class="top-reason-val">${(u.top_reason||'—').replace(/_/g,' ')}</div>
+      <div class="last-seen-val">${fmtDate(u.last_seen)}</div>
+    </div>`;
+  }).join('');
+}
+
+function renderOverviewUsers() {
+  document.getElementById('overview-users').innerHTML = usersData.slice(0,8).map((u,i) => {
+    const riColor = u.risk_index>0.7?'var(--red)':u.risk_index>0.5?'var(--orange)':'var(--yellow)';
+    const rankCls = i===0?'top1':i<3?'top3':'';
+    const hostLabel = u.hosts&&u.hosts.length?` <span style="color:var(--text3)">[${u.hosts[0]}]</span>`:'';
+    return `<div class="user-row-compact">
+      <div class="urc-rank ${rankCls}">${i+1}</div>
+      <div class="urc-name">${u.user}${hostLabel}</div>
+      <div class="urc-score" style="color:${riColor}">${u.risk_index.toFixed(3)}</div>
+      <div class="urc-count">${u.alert_count} alerts</div>
+    </div>`;
+  }).join('') || '<div class="empty-state"><p>NO DATA</p></div>';
+}
+
+// ── Render Campaigns ──────────────────────────────────────────────────────────
+function renderCampaigns() {
+  document.getElementById('camp-badge').textContent = campaignsData.length;
+  if (!campaignsData.length) { document.getElementById('campaigns-list').innerHTML='<div class="empty-state"><p>NO CAMPAIGNS DETECTED YET</p></div>'; return; }
+  document.getElementById('campaigns-list').innerHTML = campaignsData.map(c => {
+    const verdColor = c.top_verdict==='highly_anomalous'?'var(--red)':c.top_verdict==='anomalous'?'var(--orange)':'var(--yellow)';
+    const tl=c.timeline||[], maxS=Math.max(...tl.map(t=>t.score||0),0.1);
+    const tlBars=tl.map(t=>{
+      const h=Math.max(3,Math.round((t.score/maxS)*36));
+      const col=t.verdict==='highly_anomalous'?'var(--red)':t.verdict==='anomalous'?'var(--orange)':'var(--yellow)';
+      return `<div class="timeline-bar" style="height:${h}px;background:${col}" title="${t.user} ${(t.score||0).toFixed(3)}"></div>`;
+    }).join('');
+    return `<div class="campaign-card">
+      <div class="campaign-header">
+        <span class="campaign-id">${c.campaign_id}</span>
+        <div class="campaign-meta">
+          <span style="color:${verdColor}">${(c.top_verdict||'').replace(/_/g,' ').toUpperCase()}</span>
+          <span>${c.alert_count} alerts</span><span>${c.users.length} users</span>
+          <span>${fmtDate(c.first_seen)} → ${fmtDate(c.last_seen)}</span>
+        </div>
+      </div>
+      <div class="campaign-body">
+        <div class="campaign-users">
+          ${c.users.map(u=>`<span class="user-chip">${u}</span>`).join('')}
+          ${c.hosts.map(h=>`<span class="host-chip">${h}</span>`).join('')}
+        </div>
+        ${c.signatures.length?`<div class="campaign-sigs">${c.signatures.map(s=>`<div class="sig-item">⚡ ${s}</div>`).join('')}</div>`:''}
+        <div class="campaign-timeline">${tlBars}</div>
+        <div style="margin-top:6px;font-family:var(--mono2);font-size:10px;color:var(--text3)">Top reason: <span style="color:var(--text2)">${(c.top_reason||'—').replace(/_/g,' ')}</span></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ── Render Agents ─────────────────────────────────────────────────────────────
+function renderOverviewAgents() {
+  const el=document.getElementById('overview-agents'), badge=document.getElementById('ov-agents-badge');
+  if (!el) return;
+  badge.textContent = agentsData.length;
+  if (!agentsData.length) { el.innerHTML='<div class="empty-state" style="padding:20px 10px"><p>NO AGENTS</p></div>'; return; }
+  el.innerHTML = agentsData.map(a => {
+    const hasCrit=a.highly_anomalous>0, hasAnom=a.anomalous>0;
+    const nameColor=hasCrit?'var(--red)':hasAnom?'var(--orange)':'var(--green)';
+    const cntCls=hasCrit?'cnt-red':hasAnom?'cnt-orange':'';
+    const safeName=a.agent.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    const dot=hasCrit
+      ?`<span style="width:6px;height:6px;border-radius:50%;background:var(--red);display:inline-block;margin-right:6px;flex-shrink:0;box-shadow:0 0 6px var(--red)"></span>`
+      :hasAnom
+      ?`<span style="width:6px;height:6px;border-radius:50%;background:var(--orange);display:inline-block;margin-right:6px;flex-shrink:0"></span>`
+      :`<span style="width:6px;height:6px;border-radius:50%;background:var(--green);opacity:0.4;display:inline-block;margin-right:6px;flex-shrink:0"></span>`;
+    return `<div class="agent-item" onclick="goToAgent('${safeName}')" style="padding:10px 14px;">
+      <div style="display:flex;align-items:center;flex:1;min-width:0;">${dot}
+        <div style="min-width:0;">
+          <div class="agent-name" style="color:${nameColor};font-size:12px">${a.agent}</div>
+          <div class="agent-ip">${a.ip||''}${a.os?' · '+a.os:''}</div>
+        </div>
+      </div>
+      <div style="text-align:right;flex-shrink:0;">
+        <span class="agent-alert-count ${cntCls}">${a.alert_count}</span>
+        ${a.highly_anomalous>0?`<div style="font-family:var(--mono2);font-size:9px;color:var(--red);margin-top:2px">${a.highly_anomalous} critical</div>`:''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderAgents() {
+  document.getElementById('agents-badge').textContent = agentsData.length;
+  if (!agentsData.length) { document.getElementById('agents-list').innerHTML='<div class="empty-state" style="padding:30px 10px"><p>NO AGENTS</p></div>'; return; }
+  document.getElementById('agents-list').innerHTML = agentsData.map(a => {
+    const hasCrit=a.highly_anomalous>0, hasAnom=a.anomalous>0;
+    const cls=hasCrit?'has-critical':hasAnom?'has-anomalous':'';
+    const cntCls=hasCrit?'cnt-red':hasAnom?'cnt-orange':'';
+    const isActive=a.agent===selectedAgent?'active':'';
+    const safeName=a.agent.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    return `<div class="agent-item ${cls} ${isActive}" onclick="loadAgentDetail('${safeName}')">
+      <div>
+        <div class="agent-name">${a.agent}${a.agent_id?` <span style="color:var(--text3);font-size:9px">#${a.agent_id}</span>`:''}</div>
+        <div class="agent-ip">${a.ip||''}${a.os?' · '+a.os:''}</div>
+      </div>
+      <span class="agent-alert-count ${cntCls}">${a.alert_count}</span>
+    </div>`;
+  }).join('');
+}
+
+function goToFeedWithFilter(filter) {
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));
+  document.querySelector('.tab[data-tab="feed"]').classList.add('active');
+  document.getElementById('page-feed').classList.add('active');
+  feedFilter = filter;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.toggle('active', b.dataset.filter===filter));
+  renderFeed();
+}
+
+function goToAgent(agentName) {
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));
+  const tab=document.querySelector('.tab[data-tab="endpoints"]');
+  if (tab) tab.classList.add('active');
+  document.getElementById('page-endpoints').classList.add('active');
+  loadAgentDetail(agentName);
+}
+
+// ── Agent Detail ──────────────────────────────────────────────────────────────
+async function loadAgentDetail(agentName) {
+  selectedAgent = agentName;
+  document.querySelectorAll('.agent-item').forEach(el => el.classList.toggle('active', el.querySelector('.agent-name')?.textContent===agentName));
+  const agentMeta = agentsData.find(a=>a.agent===agentName)||{};
+  document.getElementById('agent-detail-title').innerHTML = `${agentName} <span style="font-size:10px;color:var(--text3);font-family:var(--mono2);font-weight:400">${agentMeta.ip||''} · ${agentMeta.os||''}</span>`;
+  const body=document.getElementById('agent-detail-body');
+  body.innerHTML='<div class="loading"><div class="spinner"></div> Loading...</div>';
+  let alerts=[];
+  try { alerts=await fetch('/api/agent/'+encodeURIComponent(agentName)).then(r=>r.json()); }
+  catch(e) { body.innerHTML='<div class="empty-state"><p>FAILED TO LOAD</p></div>'; return; }
+  const badge=document.getElementById('agent-detail-badge');
+  badge.textContent=alerts.length+' alerts'; badge.style.display='';
+
+  if (!alerts.length) {
+    body.innerHTML=`<div class="agent-summary" style="grid-template-columns:1fr 1fr;">
+      <div class="agent-stat"><div class="agent-stat-val" style="color:var(--green)">0</div><div class="agent-stat-lbl">Alerts</div></div>
+      <div class="agent-stat"><div class="agent-stat-val" style="color:var(--green);font-size:16px">CLEAN</div><div class="agent-stat-lbl">Status</div></div>
+    </div>
+    <div class="empty-state"><svg width="40" height="40" viewBox="0 0 40 40" fill="none"><circle cx="20" cy="20" r="16" stroke="#06d6a0" stroke-width="1.5" fill="none" opacity="0.4"/><path d="M13 20l5 5 9-9" stroke="#06d6a0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <p style="color:var(--green)">NO ANOMALIES DETECTED</p></div>`; return;
+  }
+
+  const critCount=alerts.filter(a=>a.verdict==='highly_anomalous').length;
+  const anomCount=alerts.filter(a=>a.verdict==='anomalous').length;
+  const suspCount=alerts.filter(a=>a.verdict==='suspicious').length;
+  const maxScore=Math.max(...alerts.map(a=>a.score||0));
+  const firstT=alerts[alerts.length-1]?.processed_at||'', lastT=alerts[0]?.processed_at||'';
+  const spanH=firstT&&lastT?(new Date(lastT)-new Date(firstT))/3600000:0;
+  const groupByDay=spanH>48;
+  const bucketMap={};
+  alerts.forEach(a=>{
+    const t=a.processed_at||a.event_time||''; if(!t) return;
+    const key=groupByDay?t.slice(0,10):t.slice(0,13);
+    if(!bucketMap[key]) bucketMap[key]={critical:0,anomalous:0,suspicious:0,total:0};
+    bucketMap[key].total++;
+    if(a.verdict==='highly_anomalous') bucketMap[key].critical++;
+    else if(a.verdict==='anomalous') bucketMap[key].anomalous++;
+    else bucketMap[key].suspicious++;
+  });
+  const bKeys=Object.keys(bucketMap).sort();
+  const sigMap={};
+  alerts.forEach(a=>{const s=(a.signature||'Unknown').slice(0,60); sigMap[s]=(sigMap[s]||0)+1;});
+  const topSigs=Object.entries(sigMap).sort((a,b)=>b[1]-a[1]).slice(0,6);
+  const userMap={};
+  alerts.forEach(a=>{const u=a.user||'unknown'; userMap[u]=(userMap[u]||0)+1;});
+  const topUsers=Object.entries(userMap).sort((a,b)=>b[1]-a[1]).slice(0,5);
+
+  function hBar(label,val,maxVal,color) {
+    const pct=maxVal>0?Math.max(2,Math.round(val/maxVal*100)):0;
+    return `<div style="margin-bottom:11px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px">
+        <span style="font-family:var(--mono2);font-size:11px;color:var(--text2);max-width:78%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${label}">${label}</span>
+        <span style="font-family:var(--mono);font-size:12px;font-weight:400;color:${color};margin-left:8px;flex-shrink:0">${val}</span>
+      </div>
+      <div style="height:8px;background:rgba(255,255,255,0.04);border-radius:4px;overflow:hidden">
+        <div style="height:100%;width:${pct}%;background:${color};border-radius:4px;opacity:0.7"></div>
+      </div>
+    </div>`;
+  }
+
+  function buildTimeline() {
+    if(!bKeys.length) return `<div style="text-align:center;padding:50px 20px;color:var(--text3);font-family:var(--mono2);font-size:11px">NO TIMELINE DATA</div>`;
+    const W=560,H=160,pL=36,pB=28,pT=10,pR=8;
+    const cW=W-pL-pR, cH=H-pB-pT, n=bKeys.length;
+    const cats=[{key:'total',color:'#00d4ff',label:'Total'},{key:'critical',color:'#ff3b5c',label:'Critical'},{key:'anomalous',color:'#ff8c42',label:'Anomalous'},{key:'suspicious',color:'#ffd166',label:'Suspicious'}];
+    const maxVal=Math.max(...bKeys.map(k=>bucketMap[k].total),1);
+    const spacing=cW/n, bW=Math.max(3,Math.floor(spacing/cats.length)-1), groupW=bW*cats.length+(cats.length-1);
+    const bars=bKeys.map((k,i)=>{
+      const d=bucketMap[k], cx=pL+i*spacing+spacing/2, startX=cx-groupW/2;
+      return cats.map((c,ci)=>{
+        const val=d[c.key]||0, x=startX+ci*(bW+1);
+        const h=Math.max(val>0?3:0,Math.round(val/maxVal*cH)), y=pT+cH-h;
+        return `<rect x="${x}" y="${y}" width="${bW}" height="${h}" fill="${c.color}" opacity="0.8" rx="1"><title>${k} · ${c.label}: ${val}</title></rect>`;
+      }).join('');
+    }).join('');
+    const gridLines=[0,0.25,0.5,0.75,1].map(f=>{
+      const y=pT+cH-Math.round(f*cH);
+      return `<line x1="${pL}" y1="${y}" x2="${W-pR}" y2="${y}" stroke="#1a2838" stroke-width="0.5" stroke-dasharray="3,3"/>
+              <text x="${pL-3}" y="${y+3}" font-size="9" fill="#3d5a72" text-anchor="end">${Math.round(f*maxVal)}</text>`;
+    }).join('');
+    const step=Math.max(1,Math.ceil(n/7));
+    const xLabels=bKeys.filter((_,i)=>i%step===0||i===n-1).map(k=>{
+      const i=bKeys.indexOf(k), x=pL+i*spacing+spacing/2;
+      const lbl=groupByDay?k.slice(5):k.slice(5).replace('T',' ')+'h';
+      return `<text x="${x}" y="${H}" font-size="9" fill="#3d5a72" text-anchor="middle">${lbl}</text>`;
+    }).join('');
+    return `<svg viewBox="0 0 ${W} ${H+4}" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:190px;display:block">
+      ${gridLines}<line x1="${pL}" y1="${pT}" x2="${pL}" y2="${pT+cH}" stroke="#243447" stroke-width="1"/>
+      <line x1="${pL}" y1="${pT+cH}" x2="${W-pR}" y2="${pT+cH}" stroke="#243447" stroke-width="1"/>
+      ${bars}${xLabels}</svg>
+    <div style="display:flex;gap:16px;margin-top:8px;flex-wrap:wrap">
+      ${cats.map(c=>`<span style="font-family:var(--mono2);font-size:10px;color:${c.color};display:flex;align-items:center;gap:5px"><span style="display:inline-block;width:10px;height:8px;background:${c.color};opacity:0.8;border-radius:2px"></span>${c.label}</span>`).join('')}
+    </div>`;
+  }
+
+  function buildVerdictBlocks() {
+    const total=alerts.length;
+    return [{label:'CRITICAL',val:critCount,color:'#ff3b5c',bg:'rgba(255,59,92,0.06)'},{label:'ANOMALOUS',val:anomCount,color:'#ff8c42',bg:'rgba(255,140,66,0.06)'},{label:'SUSPICIOUS',val:suspCount,color:'#ffd166',bg:'rgba(255,209,102,0.06)'}].map(it=>{
+      const pct=total>0?Math.round(it.val/total*100):0;
+      return `<div style="background:${it.bg};border:1px solid ${it.color}33;border-radius:5px;padding:10px 14px;display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div><div style="font-family:var(--mono2);font-size:9px;color:var(--text3);letter-spacing:2px;margin-bottom:3px">${it.label}</div>
+        <div style="font-family:var(--mono);font-size:28px;color:${it.color};line-height:1">${it.val}</div></div>
+        <div style="text-align:right"><div style="font-family:var(--mono);font-size:22px;color:${it.color};opacity:0.4">${pct}%</div>
+        <div style="font-family:var(--mono2);font-size:9px;color:var(--text3)">of ${total}</div></div>
+      </div>`;
+    }).join('');
+  }
+
+  function buildDonut() {
+    const total=alerts.length; if (!total) return '';
+    const sliceData=[{val:critCount,color:'#ff3b5c',label:'Critical'},{val:anomCount,color:'#ff8c42',label:'Anomalous'},{val:suspCount,color:'#ffd166',label:'Suspicious'}].filter(d=>d.val>0);
+    if (!sliceData.length) return '';
+    const cx=80,cy=80,r=62,ir=40; let angle=-Math.PI/2;
+    const slices=sliceData.map(d=>{
+      const sweep=(d.val/total)*Math.PI*2;
+      const x1=cx+r*Math.cos(angle),y1=cy+r*Math.sin(angle); angle+=sweep;
+      const x2=cx+r*Math.cos(angle),y2=cy+r*Math.sin(angle);
+      const ix1=cx+ir*Math.cos(angle-sweep),iy1=cy+ir*Math.sin(angle-sweep);
+      const ix2=cx+ir*Math.cos(angle),iy2=cy+ir*Math.sin(angle);
+      const large=sweep>Math.PI?1:0, pct=Math.round(d.val/total*100);
+      return `<path d="M${x1.toFixed(1)},${y1.toFixed(1)} A${r},${r} 0 ${large} 1 ${x2.toFixed(1)},${y2.toFixed(1)} L${ix2.toFixed(1)},${iy2.toFixed(1)} A${ir},${ir} 0 ${large} 0 ${ix1.toFixed(1)},${iy1.toFixed(1)} Z" fill="${d.color}" opacity="0.8"><title>${d.label}: ${d.val} (${pct}%)</title></path>`;
+    }).join('');
+    const legend=sliceData.map((d,i)=>`<rect x="168" y="${10+i*22}" width="10" height="10" fill="${d.color}" rx="2" opacity="0.8"/>
+      <text x="182" y="${20+i*22}" font-size="11" fill="#c8d8e8">${d.label}</text>
+      <text x="240" y="${20+i*22}" font-size="11" fill="${d.color}" font-weight="600">${d.val}</text>`).join('');
+    return `<svg viewBox="0 0 280 160" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:160px;display:block">
+      ${slices}<circle cx="${cx}" cy="${cy}" r="${ir-1}" fill="#070b12"/>
+      <text x="${cx}" y="${cy-8}" font-size="18" fill="#c8d8e8" text-anchor="middle">${total}</text>
+      <text x="${cx}" y="${cy+10}" font-size="9" fill="#3d5a72" text-anchor="middle">TOTAL</text>
+      <text x="${cx}" y="${cy+24}" font-size="9" fill="#3d5a72" text-anchor="middle">ALERTS</text>
+      ${legend}</svg>`;
+  }
+
+  body.innerHTML=`
+    <div class="agent-summary">
+      <div class="agent-stat"><div class="agent-stat-val" style="color:${scoreColor(maxScore)}">${maxScore.toFixed(3)}</div><div class="agent-stat-lbl">Max Score</div></div>
+      <div class="agent-stat"><div class="agent-stat-val" style="color:var(--red)">${critCount}</div><div class="agent-stat-lbl">Critical</div></div>
+      <div class="agent-stat"><div class="agent-stat-val" style="color:var(--orange)">${anomCount}</div><div class="agent-stat-lbl">Anomalous</div></div>
+      <div class="agent-stat"><div class="agent-stat-val" style="color:var(--yellow)">${suspCount}</div><div class="agent-stat-lbl">Suspicious</div></div>
+    </div>
+    <div class="agent-tabs">
+      <div class="agent-tab active" onclick="switchAgentTab('analytics')">◈ ANALYTICS</div>
+      <div class="agent-tab" onclick="switchAgentTab('events')">◈ EVENTS</div>
+    </div>
+    <div id="agent-pane-analytics" class="agent-pane" style="padding:16px;">
+      <div style="display:grid;grid-template-columns:1.6fr 1fr;gap:16px;margin-bottom:16px;">
+        <div class="ep-chart-card"><div class="ep-chart-title">Alert Timeline (${groupByDay?'by day':'by hour'})</div>${buildTimeline()}</div>
+        <div class="ep-chart-card"><div class="ep-chart-title">Verdict Breakdown</div><div style="display:flex;justify-content:center;margin-bottom:10px">${buildDonut()}</div><div style="padding:4px 0">${buildVerdictBlocks()}</div></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+        <div class="ep-chart-card"><div class="ep-chart-title">Top Triggered Rules</div><div style="padding:4px 0">${topSigs.length?topSigs.map(([s,c])=>hBar(s,c,topSigs[0][1],'var(--accent)')).join(''):'<div style="color:var(--text3);font-family:var(--mono2);font-size:11px;padding:12px">No data</div>'}</div></div>
+        <div class="ep-chart-card"><div class="ep-chart-title">Top Users</div><div style="padding:4px 0">${topUsers.length?topUsers.map(([u,c])=>hBar(u,c,topUsers[0][1],'var(--purple)')).join(''):'<div style="color:var(--text3);font-family:var(--mono2);font-size:11px;padding:12px">No data</div>'}</div></div>
+      </div>
+    </div>
+    <div id="agent-pane-events" class="agent-pane" style="display:none;">
+      <div class="feed-table-wrap" style="max-height:520px;">
+        <table>
+          <thead><tr><th>Time</th><th>User</th><th>Verdict</th><th>Score</th><th>Reasons</th><th>Campaign</th><th>Signature</th></tr></thead>
+          <tbody>${feedRows(alerts,7,'ag-')}</tbody>
+        </table>
+      </div>
+    </div>`;
+
+  alerts.forEach(a=>{
+    const id='ev-ag-'+(a.event_id||(a.processed_at+a.user));
+    const el=document.getElementById(id);
+    if (el) el.style.display='none';
+  });
+}
+
+function switchAgentTab(tab) {
+  document.querySelectorAll('.agent-tab').forEach(t=>t.classList.toggle('active',t.textContent.toLowerCase().includes(tab)));
+  document.getElementById('agent-pane-analytics').style.display=tab==='analytics'?'block':'none';
+  document.getElementById('agent-pane-events').style.display=tab==='events'?'block':'none';
+}
+
+// ── Event delegation for feed rows ───────────────────────────────────────────
+document.addEventListener('click', function(e) {
+  const row = e.target.closest('tr.feed-row');
+  if (!row) return;
+  const alertId = row.getAttribute('data-id');
+  if (alertId) toggleEvidence(alertId);
+});
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+showSkeletons();
+fetchAll();
+
+// Auto-refresh every 30s when tab is visible
+const AUTO_REFRESH_MS = 30_000;
+setInterval(() => { if (!document.hidden) fetchAll().catch(()=>{}); }, AUTO_REFRESH_MS);
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && !feedData.length) fetchAll().catch(()=>{});
+});
+</script>
+</body>
+</html>
