@@ -22,11 +22,440 @@
     --cyan:      #00d4ff;
     --text:      #c8d8e8;
     --text2:     #7a9ab5;
-    --text3:     #3d5a72;
+    --text3:     #f3f5f8;
     --mono:      'Barlow Condensed', sans-serif;
     --mono2:     'IBM Plex Mono', monospace;
     --sans:      'IBM Plex Sans', sans-serif;
+    /* theme transition */
+    --theme-transition: background 0.3s ease, color 0.3s ease, border-color 0.25s ease, box-shadow 0.25s ease;
   }
+
+  /* ── Light Theme ── */
+  html.light {
+    --bg:        #f0f4f8;
+    --bg2:       #ffffff;
+    --bg3:       #e8eef5;
+    --border:    #ccd8e8;
+    --border2:   #b0c4d8;
+    --accent:    #0088bb;
+    --accent2:   #006a94;
+    --red:       #d9283e;
+    --orange:    #d96a1a;
+    --yellow:    #b88c00;
+    --green:     #04a87c;
+    --purple:    #7b44cc;
+    --cyan:      #0088bb;
+    --text:      #1a2a3a;
+    --text2:     #3d5a72;
+    --text3:     #7a9ab5;
+  }
+
+  html.light body {
+    background: #eef2f7;
+  }
+
+  html.light body::after {
+    background-image:
+      linear-gradient(rgba(0,136,187,0.06) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,136,187,0.06) 1px, transparent 1px);
+  }
+
+  html.light body::before {
+    background:
+      radial-gradient(ellipse 80% 50% at 50% 0%, rgba(123,68,204,0.04) 0%, transparent 60%),
+      radial-gradient(ellipse 60% 40% at 100% 100%, rgba(0,136,187,0.03) 0%, transparent 50%),
+      repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.012) 2px, rgba(0,0,0,0.012) 4px);
+  }
+
+  html.light header {
+    background: linear-gradient(90deg, rgba(255,255,255,0.98) 0%, rgba(248,252,255,0.98) 50%, rgba(255,255,255,0.98) 100%);
+    border-bottom: 1px solid rgba(0,136,187,0.15);
+    box-shadow: 0 1px 0 rgba(0,136,187,0.1), 0 4px 20px rgba(0,0,0,0.08);
+  }
+
+  html.light header::before {
+    background: linear-gradient(180deg, transparent, var(--accent), transparent);
+  }
+
+  html.light .logo-text {
+    color: #1a2a3a;
+    text-shadow: 0 0 20px rgba(0,136,187,0.2);
+  }
+
+  html.light .logo-sub { color: var(--accent); }
+
+  html.light .logo-icon {
+    border-color: var(--accent);
+    box-shadow: 0 0 12px rgba(0,136,187,0.15), inset 0 0 8px rgba(0,136,187,0.04);
+  }
+
+  html.light .threat-ticker {
+    background: rgba(0,0,0,0.04);
+    border-color: var(--border);
+    color: #1a2a3a;
+  }
+  html.light .ticker-inner { color: #1a2a3a; }
+
+  html.light #refresh-btn {
+    background: rgba(0,136,187,0.06);
+    border-color: var(--accent2);
+    color: var(--accent);
+  }
+  html.light #refresh-btn:hover {
+    background: rgba(0,136,187,0.12);
+    box-shadow: 0 0 10px rgba(0,136,187,0.15);
+  }
+
+  html.light .status-pill {
+    background: rgba(4,168,124,0.06);
+    border-color: rgba(4,168,124,0.3);
+  }
+
+  html.light nav {
+    background: rgba(255,255,255,0.97);
+    border-bottom: 1px solid rgba(0,136,187,0.1);
+    box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+  }
+
+  html.light .tab { color: var(--text3); }
+  html.light .tab:hover { color: var(--text2); }
+  html.light .tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+    text-shadow: none;
+  }
+  html.light .tab.active::after {
+    background: var(--accent);
+    box-shadow: 0 0 6px var(--accent);
+  }
+
+  html.light .tl-btn {
+    border-color: var(--border);
+    color: var(--text3);
+  }
+  html.light .tl-btn:hover  { border-color: var(--accent); color: var(--accent); }
+  html.light .tl-btn.active { background: rgba(0,136,187,0.08); border-color: var(--accent); color: var(--accent); }
+
+  html.light .unified-banner {
+    background: linear-gradient(160deg, #ffffff 0%, #f7fafd 100%);
+    border: 1px solid rgba(0,136,187,0.12);
+    border-top: none;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.07);
+  }
+
+  html.light .unified-banner-header {
+    background: linear-gradient(90deg, rgba(123,68,204,0.08), rgba(0,136,187,0.04), transparent);
+    border: 1px solid rgba(123,68,204,0.14);
+    border-bottom: none;
+  }
+
+  html.light .banner-heading-title { color: #1a2a3a; text-shadow: none; }
+
+  html.light .banner-stat {
+    border-left: 1px solid var(--border);
+  }
+
+  html.light .banner-stat.red:hover    { background: rgba(217,40,62,0.05);   box-shadow: inset 0 0 24px rgba(217,40,62,0.07),  0 0 0 1px rgba(217,40,62,0.12); }
+  html.light .banner-stat.orange:hover { background: rgba(217,106,26,0.05);  box-shadow: inset 0 0 24px rgba(217,106,26,0.07), 0 0 0 1px rgba(217,106,26,0.12); }
+  html.light .banner-stat.yellow:hover { background: rgba(184,140,0,0.05);   box-shadow: inset 0 0 24px rgba(184,140,0,0.06),  0 0 0 1px rgba(184,140,0,0.1); }
+  html.light .banner-stat.blue:hover   { background: rgba(0,136,187,0.05);   box-shadow: inset 0 0 24px rgba(0,136,187,0.07),  0 0 0 1px rgba(0,136,187,0.12); }
+  html.light .banner-stat.green:hover  { background: rgba(4,168,124,0.05);   box-shadow: inset 0 0 24px rgba(4,168,124,0.07),  0 0 0 1px rgba(4,168,124,0.12); }
+  html.light .banner-stat.purple:hover { background: rgba(123,68,204,0.05);  box-shadow: inset 0 0 24px rgba(123,68,204,0.07), 0 0 0 1px rgba(123,68,204,0.12); }
+
+  html.light .banner-reasons {
+    background: linear-gradient(135deg, rgba(123,68,204,0.05), transparent);
+    border-left: 1px solid var(--border);
+  }
+
+  html.light .panel {
+    background: linear-gradient(160deg, #ffffff 0%, #f9fbfe 100%);
+    border: 1px solid var(--border);
+    box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+  }
+  html.light .panel:hover {
+    border-color: rgba(0,136,187,0.2);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+  }
+
+  html.light .panel-header {
+    background: linear-gradient(90deg, rgba(240,246,252,0.98) 0%, rgba(248,252,255,0.9) 60%, rgba(245,250,255,0.7) 100%);
+    border-bottom: 1px solid var(--border);
+  }
+  html.light .panel-header::before {
+    background: linear-gradient(180deg, transparent, var(--accent), transparent);
+    opacity: 0.5;
+  }
+
+  html.light .panel-title { color: var(--text2); }
+  html.light .panel-badge {
+    background: rgba(0,136,187,0.07);
+    border-color: rgba(0,136,187,0.2);
+    color: var(--accent);
+  }
+
+  html.light thead th {
+    background: #eef3f8;
+    color: var(--text2);
+    border-bottom: 1px solid var(--border);
+  }
+
+  html.light tbody tr:hover { background: rgba(0,136,187,0.04); }
+  html.light tbody tr { border-bottom: 1px solid rgba(180,200,220,0.4); }
+
+  html.light .agent-item:hover    { background: rgba(0,136,187,0.04); }
+  html.light .agent-item.active   { background: rgba(0,136,187,0.07); border-left: 2px solid var(--accent); }
+  html.light .agent-summary       { background: linear-gradient(90deg, #eef3f8, #f5f9ff); border-bottom: 1px solid var(--border); }
+
+  html.light .ep-chart-card {
+    background: rgba(242,248,255,0.8);
+    border: 1px solid var(--border);
+  }
+  html.light .ep-chart-card:hover {
+    border-color: rgba(0,136,187,0.22);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+  }
+
+  html.light .feed-filters { background: #f5f9ff; border-bottom: 1px solid var(--border); }
+  html.light .filter-btn { border-color: var(--border); color: var(--text3); }
+  html.light .filter-btn:hover { border-color: var(--accent); color: var(--accent); }
+  html.light .filter-btn.active { background: rgba(0,136,187,0.08); border-color: var(--accent); color: var(--accent); }
+
+  html.light .campaign-card { background: #f5f9ff; border: 1px solid var(--border); }
+  html.light .campaign-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.08); }
+
+  html.light .user-row:hover { background: rgba(0,136,187,0.04); }
+  html.light .user-row.header-row { background: #eef3f8; border-bottom: 1px solid var(--border); }
+
+  html.light .empty-state p { color: var(--text3); }
+
+  html.light .info-btn {
+    background: rgba(0,136,187,0.07);
+    border-color: rgba(0,136,187,0.18);
+    color: var(--accent);
+  }
+  html.light .info-btn:hover {
+    background: rgba(0,136,187,0.14);
+    border-color: var(--accent);
+  }
+  html.light .info-tooltip {
+    background: #ffffff;
+    border-color: rgba(0,136,187,0.2);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.12);
+  }
+  html.light .info-tooltip::before {
+    background: #ffffff;
+    border-color: rgba(0,136,187,0.2);
+  }
+
+  html.light .sig-bar-track { background: #dde8f2; }
+  html.light .score-track   { background: #dde8f2; }
+  html.light .reason-bar-wrap { background: #dde8f2; }
+
+  html.light .risk-pill.risk-low      { background: rgba(4,168,124,0.08);  border-color: rgba(4,168,124,0.35); }
+  html.light .risk-pill.risk-medium   { background: rgba(184,140,0,0.07);  border-color: rgba(184,140,0,0.35); }
+  html.light .risk-pill.risk-high     { background: rgba(217,106,26,0.07); border-color: rgba(217,106,26,0.35); }
+  html.light .risk-pill.risk-critical { background: rgba(217,40,62,0.07);  border-color: rgba(217,40,62,0.35); }
+
+  html.light .rec-action-row:hover { background: rgba(0,136,187,0.03); }
+  html.light .rec-action-row { border-bottom: 1px solid rgba(180,200,220,0.4); }
+  html.light .rec-action-num { background: rgba(123,68,204,0.08); border-color: rgba(123,68,204,0.2); color: var(--purple); }
+
+  html.light .ai-report-text { border-left: 3px solid var(--accent); color: var(--text); }
+
+  html.light ::-webkit-scrollbar-track { background: rgba(200,215,230,0.3); }
+  html.light ::-webkit-scrollbar-thumb { background: rgba(0,136,187,0.25); }
+  html.light ::-webkit-scrollbar-thumb:hover { background: rgba(0,136,187,0.4); }
+
+  html.light .loading { color: var(--text3); }
+  html.light .spinner { border-color: var(--border); border-top-color: var(--accent); }
+
+  html.light .skeleton {
+    background: linear-gradient(90deg, #e4ecf4 25%, #d0dde8 50%, #e4ecf4 75%);
+    background-size: 800px 100%;
+  }
+
+  html.light .toast { background: #ffffff; border-color: var(--border); }
+  html.light .toast.info    { border-color: rgba(0,136,187,0.3); color: var(--accent); }
+  html.light .toast.success { border-color: rgba(4,168,124,0.3); color: var(--green); }
+  html.light .toast.warning { border-color: rgba(184,140,0,0.3);  color: var(--yellow); }
+  html.light .toast.error   { border-color: rgba(217,40,62,0.3);  color: var(--red); }
+
+  /* Footer light */
+  html.light footer.site-footer {
+    background: linear-gradient(90deg, #ffffff 0%, #f5f9ff 50%, #ffffff 100%);
+    border-top: 1px solid var(--border);
+    box-shadow: 0 -2px 16px rgba(0,0,0,0.06);
+  }
+  html.light .footer-divider { background: rgba(0,136,187,0.18); }
+  html.light .footer-link:hover { color: var(--accent); }
+  html.light .footer-version { color: var(--text3); }
+
+  /* Theme toggle button */
+  .theme-toggle {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 12px;
+    border-radius: 20px;
+    border: 1px solid var(--border2);
+    background: rgba(255,255,255,0.04);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+    user-select: none;
+  }
+  .theme-toggle:hover {
+    border-color: var(--accent);
+    background: rgba(0,212,255,0.06);
+  }
+  html.light .theme-toggle {
+    background: rgba(0,136,187,0.05);
+    border-color: var(--border);
+  }
+  html.light .theme-toggle:hover {
+    border-color: var(--accent);
+    background: rgba(0,136,187,0.1);
+  }
+
+  /* Toggle track */
+  .toggle-track {
+    width: 32px; height: 17px;
+    border-radius: 10px;
+    background: var(--border2);
+    position: relative;
+    transition: background 0.25s ease;
+    flex-shrink: 0;
+  }
+  html.light .toggle-track { background: rgba(0,136,187,0.25); }
+  .toggle-track::after {
+    content: '';
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 13px; height: 13px;
+    border-radius: 50%;
+    background: var(--text3);
+    transition: transform 0.25s ease, background 0.25s ease;
+  }
+  html.light .toggle-track::after {
+    transform: translateX(15px);
+    background: var(--accent);
+  }
+
+  .toggle-icon {
+    font-size: 13px;
+    line-height: 1;
+    transition: opacity 0.2s;
+  }
+  .toggle-label {
+    font-family: var(--mono2);
+    font-size: 9px;
+    color: var(--text3);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    white-space: nowrap;
+    transition: color 0.2s;
+  }
+  html.light .toggle-label { color: var(--text2); }
+
+  /* ── Footer ── */
+  footer.site-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 24px;
+    height: 42px;
+    background: linear-gradient(90deg, rgba(4,8,12,0.98) 0%, rgba(9,14,22,0.98) 50%, rgba(4,8,12,0.98) 100%);
+    border-top: 1px solid rgba(0,212,255,0.1);
+    box-shadow: 0 -2px 16px rgba(0,0,0,0.35);
+    position: relative;
+    z-index: 50;
+    flex-shrink: 0;
+  }
+
+  .footer-left {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .footer-logo {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .footer-logo-img {
+    height: 20px;
+    width: auto;
+    opacity: 0.85;
+    filter: drop-shadow(0 0 4px rgba(0,212,255,0.2));
+  }
+
+  .footer-brand-name {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    color: rgba(200,216,232,0.8);
+    white-space: nowrap;
+  }
+
+  .footer-divider {
+    width: 1px;
+    height: 18px;
+    background: rgba(0,212,255,0.18);
+    border-radius: 1px;
+    flex-shrink: 0;
+  }
+
+  .footer-product {
+    font-family: var(--sans);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text2);
+    letter-spacing: 0.3px;
+    white-space: nowrap;
+  }
+
+  .footer-center {
+    font-family: var(--mono2);
+    font-size: 10px;
+    color: var(--text3);
+    letter-spacing: 0.5px;
+    text-align: center;
+  }
+
+  .footer-right {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .footer-version {
+    font-family: var(--mono2);
+    font-size: 10px;
+    color: var(--text3);
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+  }
+
+  .footer-link {
+    font-family: var(--sans);
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text2);
+    text-decoration: none;
+    letter-spacing: 0.3px;
+    transition: color 0.15s;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .footer-link:hover { color: var(--accent); }
+
+  /* wrap body in flex column so footer sticks to bottom */
+  html, body { height: 100%; }
+  body { display: flex; flex-direction: column; }
+  main { flex: 1; }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -37,6 +466,7 @@
     font-size: 13px;
     min-height: 100vh;
     overflow-x: hidden;
+    transition: background 0.3s ease, color 0.25s ease;
   }
 
 
@@ -153,7 +583,7 @@
 
   /* ── Live ticker — full width across header ── */
   .threat-ticker {
-    flex: 1;
+    flex:0 0 800px;
     font-family: var(--mono2);
     font-size: 11px;
     color: #ffffff;
@@ -803,8 +1233,8 @@
   .banner-stat {
     display: flex;
     flex-direction: column;
-    justify-content: center;
-    padding: 16px 16px;
+    justify-content: flex-start;
+    padding: 12px 16px 16px;
     position: relative;
     transition: background 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease;
     cursor: pointer;
@@ -862,7 +1292,7 @@
 
   .banner-stat-label {
     font-family: var(--mono2);
-    font-size: 8.5px;
+    font-size: 11px;
     letter-spacing: 1.8px;
     color: var(--text3);
     text-transform: uppercase;
@@ -872,6 +1302,13 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  .banner-stat.red    .banner-stat-label { color: var(--red);    }
+  .banner-stat.orange .banner-stat-label { color: var(--orange); }
+  .banner-stat.yellow .banner-stat-label { color: var(--yellow); }
+  .banner-stat.blue   .banner-stat-label { color: var(--accent); }
+  .banner-stat.green  .banner-stat-label { color: var(--green);  }
+  .banner-stat.purple .banner-stat-label { color: var(--purple); }
+  .banner-stat.red2   .banner-stat-label { color: var(--red);    }
   .banner-stat-value {
     font-family: var(--mono);
     font-size: 34px;
@@ -1351,6 +1788,12 @@
   <div class="header-right">
     <div class="threat-ticker"><span class="ticker-live-label">◈ LIVE</span><div class="ticker-scroll-area"><span class="ticker-inner" id="ticker-text">Initializing threat feed...</span></div></div>
     <button id="refresh-btn" onclick="manualRefresh()">⟳ REFRESH</button>
+    <!-- Theme Toggle -->
+    <button class="theme-toggle" id="theme-toggle-btn" title="Toggle light / dark theme">
+      <span class="toggle-icon" id="theme-icon">🌙</span>
+      <div class="toggle-track" id="toggle-track"></div>
+      <span class="toggle-label" id="theme-label">DARK</span>
+    </button>
     <div class="status-pill">
       <div class="status-dot"></div>
       <span>ENGINE LIVE</span>
@@ -1757,6 +2200,38 @@
   </div>
 
 </main>
+
+<!-- ── Site Footer ── -->
+<footer class="site-footer">
+  <!-- Left: logo + divider + product name -->
+  <div class="footer-left">
+    <div class="footer-logo">
+      <!-- Shield icon matching the header logo -->
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" class="footer-logo-img" style="height:20px;width:auto;">
+        <path d="M9 1L2 4.5V9C2 12.5 5 15.7 9 17C13 15.7 16 12.5 16 9V4.5L9 1Z" stroke="var(--accent)" stroke-width="1.5" fill="none"/>
+        <circle cx="9" cy="9" r="2.5" fill="var(--accent)" opacity="0.8"/>
+        <path d="M9 6V4M9 14v-2M6 9H4M14 9h-2" stroke="var(--accent)" stroke-width="1" opacity="0.5"/>
+      </svg>
+      <span class="footer-brand-name">CYBERSENTINEL</span>
+    </div>
+    <div class="footer-divider"></div>
+    <span class="footer-product">Virtual Galaxy Infotech Ltd.</span>
+  </div>
+
+  <!-- Center: copyright -->
+  <div class="footer-center">
+    © <span id="footer-year"></span> CyberSentinel UEBA. All Rights Reserved.
+  </div>
+
+  <!-- Right: version + links -->
+  <div class="footer-right">
+    <span class="footer-version">Version 1.0</span>
+    <div class="footer-divider"></div>
+    <a class="footer-link" href="#" onclick="return false;">Support</a>
+    <div class="footer-divider"></div>
+    <a class="footer-link" href="#" onclick="return false;">Privacy Policy</a>
+  </div>
+</footer>
 
 <script>
 const API = '';
@@ -2812,7 +3287,33 @@ function drawGauge(score) {
 function updateGauge(stats, feedData) {
   let score = 0;
   let critContrib = 0, anomContrib = 0, volBonus = 0;
-  if (feedData && feedData.length) {
+
+  // Compute average risk score across all agents (same formula as updateGaugeForAgent)
+  if (agentsData && agentsData.length) {
+    let totalScore = 0;
+    let totalCritContrib = 0, totalAnomContrib = 0, totalVolBonus = 0;
+    agentsData.forEach(a => {
+      const total = a.alert_count || 0;
+      const crit  = a.highly_anomalous || 0;
+      const anom  = a.anomalous || 0;
+      const cPct  = total > 0 ? (crit / total) * 100 : 0;
+      const aPct  = total > 0 ? (anom / total) * 100 : 0;
+      const cc    = cPct * 3;
+      const ac    = aPct * 1.5;
+      const vb    = total > 20 ? 10 : 0;
+      const s     = Math.min(100, cc + ac + vb);
+      totalScore      += s;
+      totalCritContrib += cc;
+      totalAnomContrib += ac;
+      totalVolBonus    += vb;
+    });
+    const n  = agentsData.length;
+    score       = Math.round((totalScore / n) * 10) / 10;
+    critContrib = Math.round((totalCritContrib / n) * 10) / 10;
+    anomContrib = Math.round((totalAnomContrib / n) * 10) / 10;
+    volBonus    = Math.round((totalVolBonus / n) * 10) / 10;
+  } else if (feedData && feedData.length) {
+    // Fallback to global stats if no per-agent data yet
     const critPct = (stats.highly_anomalous || 0) / Math.max(stats.total_alerts || 1, 1) * 100;
     const anomPct = (stats.anomalous || 0) / Math.max(stats.total_alerts || 1, 1) * 100;
     critContrib = critPct * 3;
@@ -2827,14 +3328,18 @@ function updateGauge(stats, feedData) {
   const scoreEl = document.getElementById('risk-score-val');
   const labelEl = document.getElementById('risk-label-pill');
   const agentLabel = document.getElementById('risk-gauge-agent-label');
-  if (agentLabel) { agentLabel.textContent = 'GLOBAL'; agentLabel.style.color='var(--accent)'; }
+  if (agentLabel) {
+    const n = agentsData ? agentsData.length : 0;
+    agentLabel.textContent = n > 0 ? `AVG · ${n} AGENTS` : 'GLOBAL';
+    agentLabel.style.color = 'var(--accent)';
+  }
   if (scoreEl) { scoreEl.textContent = score.toFixed(1); }
 
   // Score breakdown
   const el = (id, v) => { const e=document.getElementById(id); if(e) e.textContent=v; };
   el('gauge-crit-contrib',  critContrib.toFixed(1));
   el('gauge-anom-contrib',  anomContrib.toFixed(1));
-  el('gauge-vol-contrib',   volBonus > 0 ? '+' + volBonus : '0');
+  el('gauge-vol-contrib',   volBonus > 0 ? '+' + volBonus.toFixed(1) : '0');
 
   if (labelEl) {
     if (score < 25) {
@@ -3484,6 +3989,35 @@ function renderDashboard(stats, feedData) {
   generateAIAnalysis(stats, feedData, score);
 }
 
+// ── Theme Toggle ─────────────────────────────────────────────
+(function() {
+  const html    = document.documentElement;
+  const btn     = document.getElementById('theme-toggle-btn');
+  const icon    = document.getElementById('theme-icon');
+  const label   = document.getElementById('theme-label');
+
+  // Restore saved preference
+  const saved = localStorage.getItem('cs-theme');
+  if (saved === 'light') {
+    html.classList.add('light');
+    icon.textContent  = '☀️';
+    label.textContent = 'LIGHT';
+  }
+
+  btn.addEventListener('click', () => {
+    const isLight = html.classList.toggle('light');
+    icon.textContent  = isLight ? '☀️' : '🌙';
+    label.textContent = isLight ? 'LIGHT' : 'DARK';
+    localStorage.setItem('cs-theme', isLight ? 'light' : 'dark');
+  });
+})();
+
+// ── Footer year ───────────────────────────────────────────────
+(function() {
+  const y = document.getElementById('footer-year');
+  if (y) y.textContent = new Date().getFullYear();
+})();
+
 // ── Info-btn tooltip: use fixed positioning anchored to button rect ──
 document.addEventListener('mouseover', function(e) {
   const btn = e.target.closest('.info-btn');
@@ -3492,7 +4026,6 @@ document.addEventListener('mouseover', function(e) {
   if (!tip) return;
   const r = btn.getBoundingClientRect();
   tip.style.top  = (r.bottom + 8) + 'px';
-  // left-align tooltip with the button, but clamp so it doesn't go off-screen
   let left = r.left;
   const tipW = 252;
   if (left + tipW > window.innerWidth - 12) left = window.innerWidth - tipW - 12;
