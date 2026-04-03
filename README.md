@@ -36,7 +36,7 @@ A real-time behavioral analytics engine built on top of the **CyberSentinel SIEM
 
 ```
 ┌─────────────────────────────────┐        ┌──────────────────────────────┐
-│        222 — SOC Machine        │        │      98 — GPU Training        │
+│        222 — SOC Machine        │        │      98 — GPU Training       │
 │  ┌─────────────────────────┐    │  SSH   │  ┌────────────────────────┐  │
 │  │  Wazuh + Fortigate Logs │    │ Tunnel │  │   ueba_engine.py       │  │
 │  │  → CyberSentinel SIEM   │◄───┼────────┤  │   (Inference)          │  │
