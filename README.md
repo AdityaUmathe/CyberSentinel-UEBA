@@ -44,7 +44,7 @@ A real-time behavioral analytics engine built on top of the **CyberSentinel SIEM
 │  │  → enriched/*.jsonl.gz  │───►│        │  │   ueba_trainer.py      │  │
 │  └─────────────────────────┘    │        │  │   (PyTorch, L40S GPU)  │  │
 │  ┌─────────────────────────┐    │        │  └────────────────────────┘  │
-│  │  Dashboard (port 5001)  │◄───┼────────┤  ┌────────────────────────┐  │
+│  │  Dashboard (port 3026)  │◄───┼────────┤  ┌────────────────────────┐  │
 │  │  ueba_dashboard_server  │    │ rsync  │  │  ueba_alerts.jsonl     │  │
 │  └─────────────────────────┘    │        │  └────────────────────────┘  │
 └─────────────────────────────────┘        └──────────────────────────────┘
