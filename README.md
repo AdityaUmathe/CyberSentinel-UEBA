@@ -170,8 +170,24 @@ aditya_ueba/
 cd /root/NEW_DRIVE/aditya_ueba
 python3 -m venv venv
 source venv/bin/activate
+
+# Base stack (dashboard + CPU inference)
+pip install -r requirements.txt
+
+# GPU extras on the training host (overrides the CPU torch/faiss in requirements.txt)
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-pip install faiss-gpu scikit-learn h5py flask flask-cors numpy pandas tqdm autossh
+pip install faiss-gpu
+```
+
+### AI Security Analyst (optional)
+
+The dashboard's "AI Security Analyst" panel proxies through Flask so the
+Anthropic API key never reaches the browser. Export your key before starting
+the dashboard server; without it the panel falls back to a locally-generated
+summary.
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-…
 ```
 
 ### Set Up Reverse SSH Tunnel
@@ -255,7 +271,7 @@ pkill -f ueba_dashboard_server.py 2>/dev/null
 nohup python3 ueba_dashboard_server.py > logs/dashboard.log 2>&1 &
 ```
 
-**Dashboard URL:** `http://<GPU_SERVER_IP>:5001`
+**Dashboard URL:** `http://<GPU_SERVER_IP>:3026`
 
 ### Status Check
 
@@ -342,7 +358,7 @@ To add new suppressions, edit the `_NOISE_SIGNATURE_IDS` or `_SUPPRESS_AGENT_NAM
 
 ## Deployment Notes
 
-- The GPU server (`164.52.194.98`) must have **port 5001** open for the dashboard
+- The GPU server (`164.52.194.98`) must have **port 3026** open for the dashboard
 - The SOC machine (222) must have **autossh** running to maintain the reverse tunnel
 - The engine resumes from its last file position on restart (stored in `.state/ueba.state`) — delete this file to restart from the end of the current enriched.jsonl
 - The FAISS index holds up to `max_index_size` vectors; when full, similarity search still works but new vectors are not added until after a retrain

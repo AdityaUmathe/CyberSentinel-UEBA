@@ -214,6 +214,27 @@ profile_store:
     - total_events
 
 
+# ── Dashboard API Server ──────────────────────────────────────────────────────
+dashboard:
+  host:             "0.0.0.0"
+  port:             3026
+  alerts_file:      "/root/NEW_DRIVE/aditya_ueba/ueba_alerts.jsonl"
+  agents_registry:  "/root/NEW_DRIVE/aditya_ueba/agents.json"
+  # Where the SOC analyst's false-positive flags are persisted. JSON array
+  # of {event_id, reason, marked_at}. Rewritten atomically on every mutation.
+  false_positives_file: "/root/NEW_DRIVE/aditya_ueba/false_positives.json"
+  max_alerts:       10000        # read last N alerts per request (for performance)
+  cache_ttl_secs:   10           # re-read alerts file if older than this
+
+  # AI Security Analyst proxy — Anthropic API key from ANTHROPIC_API_KEY env var.
+  # If unset, the dashboard falls back to a locally-generated summary.
+  ai_analyst:
+    enabled:        true
+    model:          "claude-sonnet-4-6"   # latest mid-tier Claude
+    max_tokens:     1000
+    timeout_secs:   20
+
+
 # ── Streaming Engine ──────────────────────────────────────────────────────────
 streaming:
   poll_interval_ms: 100

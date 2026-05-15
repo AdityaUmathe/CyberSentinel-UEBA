@@ -1,1 +1,25 @@
 training_zips/
+
+# Vite dashboard build
+dashboard/node_modules/
+dashboard/dist/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Logs / runtime
+logs/
+.state/
+*.log
+
+# Synthetic / runtime data — not part of source
+ueba_alerts.jsonl
+false_positives.json
+agents.json
+
+# Screenshots used for issue reports / debugging
+SCR-*.png
+*.screenshot.png

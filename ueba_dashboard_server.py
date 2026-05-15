@@ -5,43 +5,159 @@ ueba_dashboard_server.py
 CyberSentinel UEBA — Dashboard API Server
 
 Serves ueba_alerts.jsonl data as JSON endpoints for the dashboard.
-Run: python3 ueba_dashboard_server.py
-Access: http://164.52.194.98:5000
+
+Run:
+    python3 ueba_dashboard_server.py
+    python3 ueba_dashboard_server.py --config ueba_config.yaml
+    python3 ueba_dashboard_server.py --port 3026 --alerts /path/to/ueba_alerts.jsonl
+
+Configuration is sourced (in priority order) from:
+    1. CLI flags
+    2. The `dashboard:` block in ueba_config.yaml
+    3. Built-in defaults (matches the historical hard-coded values)
+
+The Anthropic API key for the AI Security Analyst is taken from the
+ANTHROPIC_API_KEY environment variable. If unset, the dashboard falls back to
+a locally-generated summary.
 """
 
+import argparse
 import json
 import os
+import time
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from flask import Flask, jsonify, send_from_directory
+from typing import Any
+
+from flask import Flask, jsonify, request, send_from_directory, Response, stream_with_context
 from flask_cors import CORS
 
-app = Flask(__name__, static_folder="dashboard")
+try:
+    import yaml  # type: ignore
+except ImportError:
+    yaml = None  # config file is optional
+
+try:
+    import requests  # type: ignore
+except ImportError:
+    requests = None  # AI proxy will degrade gracefully
+
+
+# ── Defaults (used when config file or keys are missing) ──────────────────────
+_DEFAULTS = {
+    "host":            "0.0.0.0",
+    "port":            3026,
+    "alerts_file":     "/root/NEW_DRIVE/aditya_ueba/ueba_alerts.jsonl",
+    "agents_registry": "/root/NEW_DRIVE/aditya_ueba/agents.json",
+    "false_positives_file": "/root/NEW_DRIVE/aditya_ueba/false_positives.json",
+    "max_alerts":      10000,
+    "cache_ttl_secs":  10,
+    "ai_analyst": {
+        "enabled":     True,
+        "model":       "claude-sonnet-4-6",
+        "max_tokens":  1000,
+        "timeout_secs": 20,
+    },
+}
+
+
+def load_dashboard_config(config_path: str | None) -> dict:
+    """Load the `dashboard:` block from ueba_config.yaml, layered on defaults."""
+    cfg = dict(_DEFAULTS)
+    cfg["ai_analyst"] = dict(_DEFAULTS["ai_analyst"])
+    if not config_path or not yaml:
+        return cfg
+    p = Path(config_path)
+    if not p.exists():
+        return cfg
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            raw = yaml.safe_load(f) or {}
+    except Exception as e:
+        print(f"[dashboard] failed to read {config_path}: {e}")
+        return cfg
+    dash = (raw.get("dashboard") or {}) if isinstance(raw, dict) else {}
+    for k, v in dash.items():
+        if k == "ai_analyst" and isinstance(v, dict):
+            cfg["ai_analyst"].update(v)
+        else:
+            cfg[k] = v
+    return cfg
+
+
+_SERVER_STARTED_AT = datetime.now(timezone.utc).isoformat()
+
+
+# ── App + runtime config (populated in main()) ────────────────────────────────
+# The dashboard is served from one of two places, in priority order:
+#   1. dashboard/dist/         — built by `cd dashboard && npm run build`
+#   2. dashboard/index.html    — legacy single-file fallback
+# The decision is per-request so flipping between builds doesn't need a restart.
+DASHBOARD_DIR     = Path(__file__).resolve().parent / "dashboard"
+DASHBOARD_DIST    = DASHBOARD_DIR / "dist"
+DASHBOARD_LEGACY  = DASHBOARD_DIR / "index.html"
+
+app = Flask(__name__, static_folder=None)
 CORS(app)
 
-ALERTS_FILE = Path("/root/NEW_DRIVE/aditya_ueba/ueba_alerts.jsonl")
-MAX_ALERTS  = 10000   # read last N alerts for performance
-
+CFG: dict = dict(_DEFAULTS)
+CFG["ai_analyst"] = dict(_DEFAULTS["ai_analyst"])
+ALERTS_FILE: Path     = Path(_DEFAULTS["alerts_file"])
+AGENTS_REGISTRY: Path = Path(_DEFAULTS["agents_registry"])
+FP_FILE: Path         = Path(_DEFAULTS["false_positives_file"])
 
 # ── Alert cache — avoids reading the full file on every API request ──
-_alert_cache      = []
-_alert_cache_mtime = 0.0
-_CACHE_TTL_SECS    = 10   # re-read if file is >10s old in mtime terms
+_alert_cache: list = []
+_alert_cache_mtime: float = 0.0
 
-def load_alerts(n=MAX_ALERTS):
-    """Load last N alerts — cached by file mtime, refreshes every 10s max."""
+# ── False-positive store — in-memory dict, persisted to FP_FILE atomically ──
+# Maps event_id -> {"event_id": ..., "reason": "...", "marked_at": "..."}
+_fp_lock = __import__("threading").Lock()
+_fp_dict: dict = {}
+
+
+def load_fps() -> None:
+    """Load FPs from disk into _fp_dict. Safe to call multiple times."""
+    global _fp_dict
+    if not FP_FILE.exists():
+        _fp_dict = {}
+        return
+    try:
+        data = json.loads(FP_FILE.read_text(encoding="utf-8") or "[]")
+        if isinstance(data, list):
+            _fp_dict = {r["event_id"]: r for r in data if isinstance(r, dict) and r.get("event_id")}
+        else:
+            _fp_dict = {}
+    except Exception as e:
+        print(f"[dashboard] failed to load FP file {FP_FILE}: {e}")
+        _fp_dict = {}
+
+
+def save_fps() -> None:
+    """Atomically write _fp_dict to FP_FILE."""
+    tmp = FP_FILE.with_suffix(FP_FILE.suffix + ".tmp")
+    try:
+        FP_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(list(_fp_dict.values()), indent=2), encoding="utf-8")
+        tmp.replace(FP_FILE)
+    except Exception as e:
+        print(f"[dashboard] failed to persist FPs to {FP_FILE}: {e}")
+
+
+def _read_alerts_from_disk(n: int | None = None) -> list:
+    """Refresh the cache from disk and return the raw alert list (no FP filtering)."""
     global _alert_cache, _alert_cache_mtime
+    if n is None:
+        n = CFG["max_alerts"]
     if not ALERTS_FILE.exists():
         return []
     try:
         mtime = ALERTS_FILE.stat().st_mtime
     except Exception:
         return _alert_cache
-    # Return cache if file hasn't changed in the last TTL window
-    import time
     if _alert_cache and mtime == _alert_cache_mtime and \
-            (time.time() - _alert_cache_mtime) < _CACHE_TTL_SECS:
+            (time.time() - _alert_cache_mtime) < CFG["cache_ttl_secs"]:
         return _alert_cache
     alerts = []
     try:
@@ -62,7 +178,24 @@ def load_alerts(n=MAX_ALERTS):
     return alerts
 
 
-def get_user(alert):
+def load_alerts(n: int | None = None, include_fp: bool = False) -> list:
+    """Load alerts. By default filters out any alert whose event_id is FP-marked.
+    Pass include_fp=True to opt out of that filter (used by the "show FPs"
+    feed view and by /api/false-positives).
+    """
+    raw = _read_alerts_from_disk(n)
+    if include_fp or not _fp_dict:
+        return raw
+    return [a for a in raw if a.get("event_id") not in _fp_dict]
+
+
+def _wants_include_fp() -> bool:
+    """Read ?include_fp=1 from the current request."""
+    v = (request.args.get("include_fp") or "").strip().lower()
+    return v in ("1", "true", "yes", "y")
+
+
+def get_user(alert: dict) -> str:
     """Resolve the most meaningful username from an alert.
     Priority: subject.name > raw_event user fields > object.name
               > subject.ip > ae model (if personal) > host.name > 'unknown'
@@ -76,41 +209,32 @@ def get_user(alert):
     wed  = (win.get("eventdata", {}) or {})
     raw_data = raw.get("data", {}) or {}
 
-    # 1. Direct subject name — most reliable
     name = sub.get("name")
     if name and name not in ("", None):
         return name
 
-    # 2. Windows event data — subjectUserName / targetUserName
     for field in ("subjectUserName", "targetUserName", "subjectDomainName"):
         v = wed.get(field)
         if v and v not in ("", "-", None):
             return v
 
-    # 3. Generic raw_data fields (FortiGate, Syslog, etc)
     for field in ("srcuser", "dstuser", "user", "username", "accountName"):
         v = raw_data.get(field)
         if v and v not in ("", "-", None):
             return v
 
-    # 4. Object name (destination user in auth events)
     name = obj.get("name")
     if name and name not in ("", None):
         return name
 
-    # 5. Subject IP — used when no username exists (e.g. netstat rule 533)
     ip = sub.get("ip")
     if ip and ip not in ("", None):
         return ip
 
-    # 6. Autoencoder model_used — only if it's a real personal model
-    #    Exclude 'global', 'unknown', '' which are not usernames
     model = ueba.get("raw_scores", {}).get("autoencoder", {}).get("model_used", "")
     if model and model not in ("global", "unknown", "", None):
         return model
 
-    # 7. Host name — last resort before 'unknown'
-    #    Better to show 'SocSRV_15' than 'unknown' for host-level events
     hname = host.get("name")
     if hname and hname not in ("", None):
         return hname
@@ -121,7 +245,7 @@ def get_user(alert):
 @app.route("/api/stats")
 def stats():
     """Overall stats for the stats overview panel."""
-    alerts = load_alerts()
+    alerts = load_alerts(include_fp=_wants_include_fp())
     if not alerts:
         return jsonify({
             "total_alerts": 0, "highly_anomalous": 0, "anomalous": 0,
@@ -140,7 +264,6 @@ def stats():
                         if a.get("ueba", {}).get("campaign_id")})
     unique_users = len({get_user(a) for a in alerts})
 
-    # Alerts in last 1 hour
     recent = []
     for a in alerts:
         try:
@@ -150,8 +273,7 @@ def stats():
         except Exception:
             pass
 
-    # Top anomaly reasons
-    reason_counts = defaultdict(int)
+    reason_counts: dict = defaultdict(int)
     for a in alerts:
         for r in (a.get("ueba", {}).get("anomaly_reasons") or []):
             reason_counts[r] += 1
@@ -169,40 +291,49 @@ def stats():
     })
 
 
+def _alert_to_feed_item(a: dict) -> dict:
+    """Map a raw alert (as written by the engine) to the compact dict shape
+    consumed by the dashboard feed table. Used by both /api/feed and the
+    SSE /api/stream endpoint.
+    """
+    ueba = a.get("ueba", {}) or {}
+    sec  = a.get("security", {}) or {}
+    host = a.get("host", {}) or {}
+    eid  = a.get("event_id")
+    return {
+        "event_id":     eid,
+        "event_time":   a.get("event_time"),
+        "processed_at": ueba.get("processed_at"),
+        "user":         get_user(a),
+        "verdict":      ueba.get("risk_verdict"),
+        "score":        ueba.get("combined_score"),
+        "reasons":      ueba.get("anomaly_reasons", []),
+        "campaign_id":  ueba.get("campaign_id"),
+        "signature":    sec.get("signature", "")[:80],
+        "signature_id": sec.get("signature_id"),
+        "severity":     sec.get("severity"),
+        "host":         host.get("name"),
+        "host_ip":      host.get("ip"),
+        "mitre_tactic": (a.get("context", {}) or {}).get("raw_event", {}).get("rule", {}).get("mitre", {}).get("tactic", []),
+        "evidence":     a.get("evidence", {}),
+        "fp":           _fp_dict.get(eid) if eid else None,
+    }
+
+
 @app.route("/api/feed")
 def feed():
-    """Live alert feed — all loaded alerts, newest first."""
-    alerts = load_alerts()
-    feed_alerts = []
-    for a in reversed(alerts):
-        ueba = a.get("ueba", {}) or {}
-        sec  = a.get("security", {}) or {}
-        host = a.get("host", {}) or {}
-        feed_alerts.append({
-            "event_id":      a.get("event_id"),
-            "event_time":    a.get("event_time"),
-            "processed_at":  ueba.get("processed_at"),
-            "user":          get_user(a),
-            "verdict":       ueba.get("risk_verdict"),
-            "score":         ueba.get("combined_score"),
-            "reasons":       ueba.get("anomaly_reasons", []),
-            "campaign_id":   ueba.get("campaign_id"),
-            "signature":     sec.get("signature", "")[:80],
-            "signature_id":  sec.get("signature_id"),
-            "severity":      sec.get("severity"),
-            "host":          host.get("name"),
-            "host_ip":       host.get("ip"),
-            "mitre_tactic":  (a.get("context", {}) or {}).get("raw_event", {}).get("rule", {}).get("mitre", {}).get("tactic", []),
-            "evidence":      a.get("evidence", {}),   # full evidence block for SOC analysts
-        })
-    return jsonify(feed_alerts)
+    """Live alert feed — all loaded alerts, newest first.
+    FP-marked alerts are filtered out unless ?include_fp=1 is passed.
+    """
+    alerts = load_alerts(include_fp=_wants_include_fp())
+    return jsonify([_alert_to_feed_item(a) for a in reversed(alerts)])
 
 
 @app.route("/api/users")
 def users():
     """User risk leaderboard — top 20 riskiest users."""
-    alerts = load_alerts()
-    user_stats = defaultdict(lambda: {
+    alerts = load_alerts(include_fp=_wants_include_fp())
+    user_stats: dict = defaultdict(lambda: {
         "count": 0, "max_score": 0.0, "verdicts": defaultdict(int),
         "reasons": defaultdict(int), "last_seen": "", "hosts": set()
     })
@@ -223,7 +354,6 @@ def users():
         for r in (ueba.get("anomaly_reasons") or []):
             user_stats[user]["reasons"][r] += 1
 
-    # Score users: weight by max_score * count + highly_anomalous bonus
     leaderboard = []
     for user, s in user_stats.items():
         if user in ("unknown", "global", ""):
@@ -249,8 +379,8 @@ def users():
 @app.route("/api/campaigns")
 def campaigns():
     """Campaign timeline data."""
-    alerts = load_alerts()
-    campaign_data = defaultdict(lambda: {
+    alerts = load_alerts(include_fp=_wants_include_fp())
+    campaign_data: dict = defaultdict(lambda: {
         "alerts": [], "users": set(), "hosts": set(),
         "first_seen": "", "last_seen": "", "verdicts": defaultdict(int),
         "reasons": defaultdict(int), "signatures": set()
@@ -309,17 +439,15 @@ def campaigns():
 @app.route("/api/agents")
 def agents():
     """Agent (endpoint) summary — all registered agents, merged with alert stats."""
-    # Load static agent registry
-    registry = []
-    registry_path = Path("/root/NEW_DRIVE/aditya_ueba/agents.json")
-    if registry_path.exists():
+    registry: list = []
+    if AGENTS_REGISTRY.exists():
         try:
-            registry = json.loads(registry_path.read_text())
+            registry = json.loads(AGENTS_REGISTRY.read_text())
         except Exception:
             pass
 
-    alerts = load_alerts()
-    agent_stats = defaultdict(lambda: {
+    alerts = load_alerts(include_fp=_wants_include_fp())
+    agent_stats: dict = defaultdict(lambda: {
         "alert_count": 0, "max_score": 0.0,
         "verdicts": defaultdict(int), "users": set(),
         "reasons": defaultdict(int), "last_seen": "",
@@ -351,7 +479,6 @@ def agents():
         if t > s["last_seen"]:
             s["last_seen"] = t
 
-    # Build result — start from registry so all agents appear
     seen = set()
     result = []
     for reg in registry:
@@ -376,7 +503,6 @@ def agents():
             "suspicious":       verdicts.get("suspicious", 0),
         })
 
-    # Add any agents seen in alerts but not in registry
     for name, s in agent_stats.items():
         if name in seen:
             continue
@@ -405,41 +531,383 @@ def agents():
 @app.route("/api/agent/<agent_name>")
 def agent_alerts(agent_name):
     """All alerts for a specific agent, newest first."""
-    alerts = load_alerts()
-    result = []
+    alerts = load_alerts(include_fp=_wants_include_fp())
+    out = []
     for a in reversed(alerts):
-        host = (a.get("host", {}) or {}).get("name", "")
-        if host != agent_name:
+        if ((a.get("host", {}) or {}).get("name", "")) != agent_name:
             continue
-        ueba = a.get("ueba", {}) or {}
-        sec  = a.get("security", {}) or {}
-        result.append({
-            "event_id":     a.get("event_id"),
-            "event_time":   a.get("event_time"),
-            "processed_at": ueba.get("processed_at"),
-            "user":         get_user(a),
-            "verdict":      ueba.get("risk_verdict"),
-            "score":        ueba.get("combined_score"),
-            "reasons":      ueba.get("anomaly_reasons", []),
-            "campaign_id":  ueba.get("campaign_id"),
-            "signature":    sec.get("signature", "")[:80],
-            "signature_id": sec.get("signature_id"),
-            "severity":     sec.get("severity"),
-            "host":         host,
-            "host_ip":      (a.get("host", {}) or {}).get("ip"),
-            "mitre_tactic": (a.get("context", {}) or {}).get("raw_event", {}).get("rule", {}).get("mitre", {}).get("tactic", []),
-            "evidence":     a.get("evidence", {}),
-        })
-    return jsonify(result)
+        out.append(_alert_to_feed_item(a))
+    return jsonify(out)
+
+
+@app.route("/api/user/<path:username>")
+def user_alerts(username):
+    """All alerts for a specific user, newest first."""
+    alerts = load_alerts(include_fp=_wants_include_fp())
+    out = []
+    for a in reversed(alerts):
+        if get_user(a) != username:
+            continue
+        out.append(_alert_to_feed_item(a))
+    return jsonify(out)
+
+
+# ── False-positive management ────────────────────────────────────────────────
+@app.route("/api/false-positives")
+def list_false_positives():
+    """Return all FP records, each enriched with the original alert payload."""
+    # Always read the raw alert list (include_fp=True) so we can look up the
+    # underlying alert even if it's been FP-filtered.
+    raw = load_alerts(include_fp=True)
+    by_id = {a.get("event_id"): a for a in raw if a.get("event_id")}
+    out = []
+    for eid, rec in _fp_dict.items():
+        a = by_id.get(eid)
+        out.append({**rec, "alert": _alert_to_feed_item(a) if a else None})
+    out.sort(key=lambda r: r.get("marked_at", ""), reverse=True)
+    return jsonify(out)
+
+
+@app.route("/api/false-positive", methods=["POST"])
+def mark_false_positive():
+    body = request.get_json(silent=True) or {}
+    eid = (body.get("event_id") or "").strip()
+    reason = (body.get("reason") or "").strip()
+    if not eid:
+        return jsonify({"ok": False, "error": "event_id required"}), 400
+    rec = {
+        "event_id":  eid,
+        "reason":    reason,
+        "marked_at": datetime.now(timezone.utc).isoformat(),
+    }
+    with _fp_lock:
+        _fp_dict[eid] = rec
+        save_fps()
+    return jsonify({"ok": True, "record": rec})
+
+
+@app.route("/api/false-positive/<path:event_id>", methods=["DELETE"])
+def unmark_false_positive(event_id):
+    with _fp_lock:
+        existed = _fp_dict.pop(event_id, None)
+        if existed:
+            save_fps()
+    return jsonify({"ok": True, "removed": bool(existed)})
+
+
+def _event_ids_in_campaign(campaign_id: str) -> list[str]:
+    """Scan the raw (unfiltered) alert list and return every event_id whose
+    ueba.campaign_id equals campaign_id."""
+    raw = _read_alerts_from_disk()
+    return [
+        a["event_id"]
+        for a in raw
+        if a.get("event_id")
+        and (a.get("ueba", {}) or {}).get("campaign_id") == campaign_id
+    ]
+
+
+@app.route("/api/false-positive/campaign/<path:campaign_id>", methods=["POST"])
+def mark_campaign_false_positive(campaign_id):
+    body = request.get_json(silent=True) or {}
+    reason = (body.get("reason") or "").strip() \
+             or f"campaign {campaign_id} marked as false positive"
+    eids = _event_ids_in_campaign(campaign_id)
+    if not eids:
+        return jsonify({"ok": False, "error": "no alerts for campaign"}), 404
+    now = datetime.now(timezone.utc).isoformat()
+    with _fp_lock:
+        for eid in eids:
+            _fp_dict[eid] = {"event_id": eid, "reason": reason, "marked_at": now}
+        save_fps()
+    return jsonify({"ok": True, "marked": len(eids), "campaign_id": campaign_id})
+
+
+@app.route("/api/false-positive/campaign/<path:campaign_id>", methods=["DELETE"])
+def unmark_campaign_false_positive(campaign_id):
+    eids = _event_ids_in_campaign(campaign_id)
+    with _fp_lock:
+        removed = 0
+        for eid in eids:
+            if _fp_dict.pop(eid, None):
+                removed += 1
+        if removed:
+            save_fps()
+    return jsonify({"ok": True, "removed": removed, "campaign_id": campaign_id})
+
+
+# ── Engine health ────────────────────────────────────────────────────────────
+@app.route("/api/health")
+def health():
+    """Engine + dashboard health snapshot for the Overview health card."""
+    alerts = load_alerts(include_fp=True)   # include FPs so we report the real engine output
+    total = len(alerts)
+
+    now = datetime.now(timezone.utc)
+    one_hour_ago  = now - timedelta(hours=1)
+    one_day_ago   = now - timedelta(hours=24)
+    alerts_1h     = 0
+    alerts_24h    = 0
+    newest_iso    = None
+    newest_dt     = None
+    for a in alerts:
+        ts = (a.get("ueba", {}) or {}).get("processed_at") or a.get("event_time") or ""
+        try:
+            d = datetime.fromisoformat(ts.replace("Z", "+00:00")) if ts else None
+        except Exception:
+            d = None
+        if d is None:
+            continue
+        if d >= one_hour_ago: alerts_1h  += 1
+        if d >= one_day_ago:  alerts_24h += 1
+        if newest_dt is None or d > newest_dt:
+            newest_dt  = d
+            newest_iso = ts
+
+    try:
+        file_size = ALERTS_FILE.stat().st_size if ALERTS_FILE.exists() else 0
+    except Exception:
+        file_size = 0
+
+    fp_count = len(_fp_dict)
+    fp_rate  = round((fp_count / total) * 100, 2) if total > 0 else 0.0
+
+    try:
+        started = datetime.fromisoformat(_SERVER_STARTED_AT)
+        uptime  = int((now - started).total_seconds())
+    except Exception:
+        uptime = 0
+
+    # "Engine live" = at least one alert within the last 5 minutes.
+    engine_live = bool(newest_dt and (now - newest_dt).total_seconds() < 300)
+
+    return jsonify({
+        "total_alerts":           total,
+        "alerts_1h":              alerts_1h,
+        "alerts_24h":             alerts_24h,
+        "newest_alert_time":      newest_iso,
+        "alerts_file_size_bytes": file_size,
+        "fp_count":               fp_count,
+        "fp_rate_pct":            fp_rate,
+        "server_started_at":      _SERVER_STARTED_AT,
+        "uptime_secs":            uptime,
+        "engine_live":            engine_live,
+    })
+
+
+# ── Live event stream (Server-Sent Events) ───────────────────────────────────
+# /api/stream tails ueba_alerts.jsonl from "now" and pushes every new alert as
+# an SSE 'alert' event. The dashboard's initial state is already loaded via
+# /api/feed at boot — the stream only delivers what arrives after connection.
+
+@app.route("/api/stream")
+def stream_alerts():
+    @stream_with_context
+    def event_stream():
+        # Send a hello frame so the EventSource transitions from 'connecting'
+        # to 'open' immediately, even before the first alert arrives.
+        yield "event: hello\ndata: {}\n\n"
+
+        # Start at the current end of the file — don't replay history.
+        try:
+            last_pos = ALERTS_FILE.stat().st_size if ALERTS_FILE.exists() else 0
+        except Exception:
+            last_pos = 0
+        last_heartbeat = time.time()
+
+        while True:
+            try:
+                if ALERTS_FILE.exists():
+                    try:
+                        size = ALERTS_FILE.stat().st_size
+                    except Exception:
+                        size = last_pos
+                    if size < last_pos:
+                        # File rotated / truncated — start from the new end.
+                        last_pos = 0
+                    if size > last_pos:
+                        try:
+                            with open(ALERTS_FILE, "r", encoding="utf-8", errors="replace") as f:
+                                f.seek(last_pos)
+                                chunk = f.read()
+                                last_pos = f.tell()
+                        except Exception:
+                            chunk = ""
+                        for line in chunk.splitlines():
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                alert = json.loads(line)
+                            except json.JSONDecodeError:
+                                continue
+                            eid = alert.get("event_id")
+                            if eid and eid in _fp_dict:
+                                continue   # already a known FP, don't push it
+                            payload = _alert_to_feed_item(alert)
+                            yield f"event: alert\ndata: {json.dumps(payload, default=str)}\n\n"
+
+                now = time.time()
+                if now - last_heartbeat > 15:
+                    # SSE comment lines keep the connection alive through
+                    # proxies/load balancers without delivering an event.
+                    yield ": heartbeat\n\n"
+                    last_heartbeat = now
+                time.sleep(1.0)
+            except GeneratorExit:
+                return
+            except Exception as e:
+                # Surface and continue; the client will keep us open.
+                try:
+                    yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+                except Exception:
+                    return
+                time.sleep(2.0)
+
+    headers = {
+        "Cache-Control":     "no-cache",
+        "X-Accel-Buffering": "no",       # disable nginx buffering
+        "Connection":        "keep-alive",
+    }
+    return Response(event_stream(), mimetype="text/event-stream", headers=headers)
+
+
+# ── AI Security Analyst proxy ────────────────────────────────────────────────
+@app.route("/api/ai-analyze", methods=["POST"])
+def ai_analyze():
+    """Proxy the AI Security Analyst prompt to Anthropic with a server-side key.
+
+    Request body: { "prompt": "..." }
+    Response: { "ok": bool, "text": "...", "source": "anthropic"|"fallback", "error": "..." }
+    """
+    ai_cfg = CFG.get("ai_analyst", {}) or {}
+    body = request.get_json(silent=True) or {}
+    prompt = (body.get("prompt") or "").strip()
+    if not prompt:
+        return jsonify({"ok": False, "error": "missing prompt", "source": "fallback"}), 400
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+
+    if not ai_cfg.get("enabled", True):
+        return jsonify({"ok": False, "error": "ai_analyst disabled", "source": "fallback"})
+    if not api_key:
+        return jsonify({"ok": False, "error": "ANTHROPIC_API_KEY not set", "source": "fallback"})
+    if requests is None:
+        return jsonify({"ok": False, "error": "requests not installed", "source": "fallback"})
+
+    try:
+        r = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model":      ai_cfg.get("model", "claude-sonnet-4-6"),
+                "max_tokens": int(ai_cfg.get("max_tokens", 1000)),
+                "messages":   [{"role": "user", "content": prompt}],
+            },
+            timeout=int(ai_cfg.get("timeout_secs", 20)),
+        )
+        if r.status_code != 200:
+            return jsonify({
+                "ok": False,
+                "error": f"upstream {r.status_code}: {r.text[:200]}",
+                "source": "fallback",
+            })
+        data = r.json()
+        text = "".join(c.get("text", "") for c in data.get("content", []) if c.get("type") == "text")
+        if not text:
+            return jsonify({"ok": False, "error": "empty response", "source": "fallback"})
+        return jsonify({"ok": True, "text": text, "source": "anthropic"})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "source": "fallback"})
+
+
+# ── Static + index ───────────────────────────────────────────────────────────
+def _serve_index():
+    """Serve dashboard/dist/index.html if it exists, otherwise the legacy file."""
+    dist_index = DASHBOARD_DIST / "index.html"
+    if dist_index.exists():
+        return send_from_directory(str(DASHBOARD_DIST), "index.html")
+    return send_from_directory(str(DASHBOARD_DIR), "index.html")
 
 
 @app.route("/")
 def index():
-    return send_from_directory("dashboard", "index.html")
+    return _serve_index()
+
+
+@app.route("/assets/<path:filename>")
+def dist_assets(filename):
+    """Vite's hashed JS/CSS bundles live under dashboard/dist/assets/."""
+    return send_from_directory(str(DASHBOARD_DIST / "assets"), filename)
+
+
+@app.route("/legacy")
+def legacy_index():
+    """Always serve the pre-Vite single-file dashboard for fallback debugging."""
+    return send_from_directory(str(DASHBOARD_DIR), "index.legacy.html")
+
+
+# SPA fallback — the client-side router activates the right tab based on the
+# URL. Anything that isn't /api/*, /assets/*, or /legacy returns index.html so
+# the dashboard can handle the routing in the browser.
+SPA_TAB_PATHS = {"overview", "feed", "users", "campaigns", "endpoints", "false-positives"}
+
+@app.route("/<path:subpath>")
+def spa_fallback(subpath):
+    head = subpath.split("/", 1)[0]
+    if head in SPA_TAB_PATHS:
+        return _serve_index()
+    from flask import abort
+    abort(404)
+
+
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="CyberSentinel UEBA Dashboard API server")
+    p.add_argument("--config", default="ueba_config.yaml",
+                   help="Path to ueba_config.yaml (default: ueba_config.yaml)")
+    p.add_argument("--host", default=None, help="Bind host (overrides config)")
+    p.add_argument("--port", type=int, default=None, help="Bind port (overrides config)")
+    p.add_argument("--alerts", default=None, help="Path to ueba_alerts.jsonl (overrides config)")
+    p.add_argument("--agents-registry", default=None,
+                   help="Path to agents.json (overrides config)")
+    p.add_argument("--fp-file", default=None,
+                   help="Path to false_positives.json (overrides config)")
+    p.add_argument("--debug", action="store_true", help="Run Flask in debug mode")
+    return p.parse_args()
+
+
+def main() -> None:
+    global CFG, ALERTS_FILE, AGENTS_REGISTRY, FP_FILE
+    args = _parse_args()
+    CFG = load_dashboard_config(args.config)
+
+    if args.host:            CFG["host"] = args.host
+    if args.port:            CFG["port"] = args.port
+    if args.alerts:          CFG["alerts_file"] = args.alerts
+    if args.agents_registry: CFG["agents_registry"] = args.agents_registry
+    if args.fp_file:         CFG["false_positives_file"] = args.fp_file
+
+    ALERTS_FILE     = Path(CFG["alerts_file"])
+    AGENTS_REGISTRY = Path(CFG["agents_registry"])
+    FP_FILE         = Path(CFG["false_positives_file"])
+    load_fps()
+
+    dist_ok = (DASHBOARD_DIST / "index.html").exists()
+    print("CyberSentinel UEBA Dashboard")
+    print(f"  Config:           {args.config}")
+    print(f"  Reading alerts:   {ALERTS_FILE}")
+    print(f"  Agents registry:  {AGENTS_REGISTRY}")
+    print(f"  False positives:  {FP_FILE}  ({len(_fp_dict)} loaded)")
+    print(f"  Dashboard build:  {'dist/ (Vite build)' if dist_ok else 'legacy index.html'}")
+    print(f"  AI analyst:       "
+          f"{'enabled' if CFG['ai_analyst'].get('enabled') and os.environ.get('ANTHROPIC_API_KEY') else 'fallback only'}")
+    print(f"  Listening on:     http://{CFG['host']}:{CFG['port']}")
+    app.run(host=CFG["host"], port=CFG["port"], debug=args.debug)
 
 
 if __name__ == "__main__":
-    print("CyberSentinel UEBA Dashboard")
-    print(f"Reading alerts from: {ALERTS_FILE}")
-    print("Starting server on http://0.0.0.0:3026")
-    app.run(host="0.0.0.0", port=3026, debug=False)
+    main()
