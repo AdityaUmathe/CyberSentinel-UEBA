@@ -94,6 +94,7 @@ export function initFeedToolbar() {
     if (!pop || !wrap) return;
     pop.setAttribute("hidden", "");
     wrap.classList.remove("open");
+    if (btn) btn.setAttribute("aria-expanded", "false");
   }
 
   if (btn && pop && wrap) {
@@ -106,6 +107,7 @@ export function initFeedToolbar() {
         // popover is never visible at the wrong spot.
         pop.removeAttribute("hidden");
         wrap.classList.add("open");
+        btn.setAttribute("aria-expanded", "true");
         // Position after a microtask so the browser has computed offsetWidth.
         _positionPop();
         requestAnimationFrame(_positionPop);

@@ -16,6 +16,7 @@ import { initTheme } from "./ui/theme.js";
 import { initFooter, openFooterPage, closeFooterPage } from "./ui/footer.js";
 import { initInfoTooltip } from "./ui/info-tooltip.js";
 import { initTabs } from "./ui/tabs.js";
+import { initShortcuts } from "./ui/shortcuts.js";
 import { initFeedToolbar } from "./panels/feed-toolbar.js";
 import { jumpToAlert, toggleEvidence } from "./panels/feed.js";
 import { goToAgent, loadAgentDetail, switchAgentTab, goToFeedWithFilter } from "./panels/agents.js";
@@ -71,6 +72,7 @@ initRouter();  // must run before initTabs so the initial URL drives tab state
 initTabs();
 initFeedToolbar();
 initUserDetail();
+initShortcuts();
 
 // ── Show FPs toggle in the feed header ───────────────────────────────────────
 const fpToggle = document.getElementById("fp-toggle-cb");

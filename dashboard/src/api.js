@@ -55,33 +55,56 @@ export async function fetchAll() {
   if (pillSpan) pillSpan.textContent = "ENGINE LIVE";
 }
 
-export async function manualRefresh() {
+// Refresh feels instant: button shows a brief spinner state, an immediate
+// toast confirms the click, and fetchAll runs in the background. The
+// button only stays disabled long enough to prevent double-clicks (600ms),
+// then becomes clickable again — the actual data render finishes when
+// it finishes, but the UI never feels frozen.
+let _refreshInFlight = false;
+export function manualRefresh() {
+  if (_refreshInFlight) return;
+  _refreshInFlight = true;
+
   const btn = document.getElementById("refresh-btn");
   if (btn) {
-    btn.textContent = "⟳ LOADING...";
     btn.style.opacity = "0.6";
     btn.style.pointerEvents = "none";
+    // Spin the glyph; keep the "REFRESH" word so width doesn't jump.
+    btn.classList.add("refreshing");
   }
-  try {
-    state.aiGenerated = false;
-    await fetchAll();
-    showToast("Dashboard refreshed", "success");
-  } catch (e) {
-    const dot  = document.querySelector(".status-dot");
-    const pill = document.querySelector(".status-pill");
-    const pillSpan = document.querySelector(".status-pill span");
-    if (dot)  dot.style.background = "var(--red)";
-    if (pill) pill.style.color = "var(--red)";
-    if (pillSpan) pillSpan.textContent = "OFFLINE";
-    const lu = document.getElementById("last-update");
-    if (lu) lu.textContent = "Connection error";
-    showToast("Connection failed — engine offline?", "error");
-  }
-  if (btn) {
-    btn.textContent = "⟳ REFRESH";
-    btn.style.opacity = "1";
-    btn.style.pointerEvents = "auto";
-  }
+  // Immediate toast so the click feels acknowledged.
+  showToast("Refreshing dashboard…", "info");
+
+  state.aiGenerated = false;
+
+  // Run the heavy fetch+render fully asynchronously; don't await.
+  fetchAll()
+    .then(() => {
+      showToast("Dashboard refreshed", "success");
+    })
+    .catch(() => {
+      const dot  = document.querySelector(".status-dot");
+      const pill = document.querySelector(".status-pill");
+      const pillSpan = document.querySelector(".status-pill span");
+      if (dot)  dot.style.background = "var(--red)";
+      if (pill) pill.style.color = "var(--red)";
+      if (pillSpan) pillSpan.textContent = "OFFLINE";
+      const lu = document.getElementById("last-update");
+      if (lu) lu.textContent = "Connection error";
+      showToast("Connection failed — engine offline?", "error");
+    });
+
+  // Re-enable the button after a short cooldown — independent of the
+  // network call. This prevents accidental double-refreshes but doesn't
+  // leave the UI feeling frozen if the request is slow.
+  setTimeout(() => {
+    if (btn) {
+      btn.style.opacity = "1";
+      btn.style.pointerEvents = "auto";
+      btn.classList.remove("refreshing");
+    }
+    _refreshInFlight = false;
+  }, 600);
 }
 
 // ── False-positive mutators ───────────────────────────────────────────────────

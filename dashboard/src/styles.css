@@ -272,41 +272,18 @@
   html.light .toast.warning { border-color: rgba(184,140,0,0.3);  color: var(--yellow); }
   html.light .toast.error   { border-color: rgba(217,40,62,0.3);  color: var(--red); }
 
-  /* Footer light */
+  /* Footer — VG logo. The PNG has transparent background with dark
+     glyphs, so we render against a light grey bar in both themes. No
+     filter — drop-shadows tint transparent edges and dim the colour. */
   .footer-vgipl-logo {
-    height: 28px;
+    height: 26px;
     width: auto;
-    opacity: 0.92;
-    filter: drop-shadow(0 0 3px rgba(0,212,255,0.1));
-    transition: opacity 0.2s, filter 0.2s;
+    display: block;
+    transition: transform 0.2s, opacity 0.2s;
     flex-shrink: 0;
   }
-  .footer-vgipl-logo:hover {
-    opacity: 1;
-    filter: drop-shadow(0 0 6px rgba(0,212,255,0.2));
-  }
-  html.light .footer-vgipl-logo {
-    filter: none;
-    opacity: 0.9;
-  }
-
-  html.light footer.site-footer {
-    background: linear-gradient(135deg,
-      rgba(240,246,252,0.55) 0%,
-      rgba(248,252,255,0.45) 40%,
-      rgba(240,246,252,0.55) 100%);
-    border-top: 1px solid rgba(0,136,187,0.15);
-    box-shadow:
-      0 -1px 0 rgba(0,136,187,0.12),
-      0 -8px 32px rgba(0,0,0,0.08),
-      inset 0 1px 0 rgba(255,255,255,0.7),
-      inset 0 0 60px rgba(0,136,187,0.02);
-    backdrop-filter: blur(24px) saturate(160%);
-    -webkit-backdrop-filter: blur(24px) saturate(160%);
-  }
-  html.light .footer-divider { background: rgba(0,136,187,0.18); }
-  html.light .footer-link:hover { color: var(--accent); }
-  html.light .footer-version { color: var(--text3); }
+  .footer-vgipl-logo:hover { transform: translateY(-1px); }
+  html.light .footer-vgipl-logo { transform: none; }
 
   /* Theme toggle button */
   .theme-toggle {
@@ -375,97 +352,63 @@
   }
   html.light .toggle-label { color: var(--text2); }
 
-  /* ── Footer ── */
+
+  /* ── Footer ── (redesigned Phase 6 — vertical gradient blends into the
+     page at the top edge and rises to near-white at the bottom so the
+     VG logo sits on a clean light surface.) */
   footer.site-footer {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 24px;
-    height: 48px;
-    background: linear-gradient(135deg,
-      rgba(10,18,28,0.55) 0%,
-      rgba(14,24,38,0.45) 40%,
-      rgba(10,18,28,0.55) 100%);
-    border-top: 1px solid rgba(0,212,255,0.18);
-    border-top-color: rgba(255,255,255,0.08);
-    box-shadow:
-      0 -1px 0 rgba(0,212,255,0.12),
-      0 -8px 32px rgba(0,0,0,0.4),
-      inset 0 1px 0 rgba(255,255,255,0.06),
-      inset 0 0 60px rgba(0,212,255,0.02);
+    padding: 0 26px;
+    height: 56px;
+    /* Top blends to page bg, bottom is bright so the logo reads clearly. */
+    background: linear-gradient(180deg, var(--bg) 0%, #ffffff 100%);
+    border-top: 0;
+    box-shadow: none;
     position: sticky;
     bottom: 0;
     z-index: 200;
     flex-shrink: 0;
-    backdrop-filter: blur(24px) saturate(160%);
-    -webkit-backdrop-filter: blur(24px) saturate(160%);
+    color: #1a1b22;
+    font-family: var(--sans);
+  }
+  html.light footer.site-footer {
+    /* Light theme: page bg is already pale; we still fade to pure white
+       so the logo plate is consistent across themes. */
+    background: linear-gradient(180deg, var(--bg) 0%, #ffffff 100%);
   }
 
-  .footer-left {
+  .footer-left, .footer-right {
     display: flex;
     align-items: center;
     gap: 14px;
-  }
-
-  .footer-logo {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .footer-logo-img {
-    height: 20px;
-    width: auto;
-    opacity: 0.85;
-    filter: drop-shadow(0 0 4px rgba(0,212,255,0.2));
-  }
-
-  .footer-brand-name {
-    font-family: var(--mono);
-    font-size: 13px;
-    font-weight: 700;
-    letter-spacing: 1.5px;
-    color: #6b8099;
-    white-space: nowrap;
-  }
-
-  .footer-divider {
-    width: 1px;
-    height: 18px;
-    background: rgba(0,212,255,0.18);
-    border-radius: 1px;
-    flex-shrink: 0;
-  }
-
-  .footer-product {
-    font-family: var(--sans);
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--text2);
-    letter-spacing: 0.3px;
-    white-space: nowrap;
   }
 
   .footer-center {
     font-family: var(--mono2);
-    font-size: 10px;
-    color: #6b8099;
-    letter-spacing: 0.5px;
+    font-size: 11px;
+    color: #2b2c33;
+    letter-spacing: 0.4px;
     text-align: center;
   }
 
-  .footer-right {
-    display: flex;
-    align-items: center;
-    gap: 14px;
+  .footer-divider {
+    width: 1px;
+    height: 16px;
+    background: rgba(0, 0, 0, 0.22);
+    border-radius: 1px;
+    flex-shrink: 0;
   }
+  html.light .footer-divider { background: rgba(0, 0, 0, 0.18); }
 
   .footer-version {
     font-family: var(--mono2);
-    font-size: 10px;
-    color: #6b8099;
+    font-size: 11px;
+    color: #2b2c33;
     letter-spacing: 0.5px;
     white-space: nowrap;
+    font-weight: 600;
   }
 
   /* ── Footer Page Modal ── */
@@ -633,15 +576,21 @@
   .footer-link {
     font-family: var(--sans);
     font-size: 11px;
-    font-weight: 500;
-    color: #6b8099;
+    font-weight: 600;
+    color: #2b2c33;
     text-decoration: none;
     letter-spacing: 0.3px;
-    transition: color 0.15s;
+    transition: color 0.15s, text-decoration-color 0.15s;
     cursor: pointer;
     white-space: nowrap;
   }
-  .footer-link:hover { color: var(--accent); }
+  .footer-link:hover {
+    color: #0d0d12;
+    text-decoration: underline;
+    text-decoration-color: rgba(0, 0, 0, 0.5);
+    text-underline-offset: 3px;
+  }
+  html.light .footer-link:hover { color: var(--accent); }
 
   /* wrap body in flex column so footer sticks to bottom */
   html, body { height: 100%; }
@@ -692,7 +641,7 @@
   header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 16px;
     padding: 0 24px;
     height: 58px;
     border-bottom: 1px solid rgba(0,212,255,0.12);
@@ -724,6 +673,7 @@
     display: flex;
     align-items: center;
     gap: 14px;
+    flex-shrink: 0;
   }
 
   .logo-icon {
@@ -767,33 +717,36 @@
   .header-right {
     display: flex;
     align-items: center;
-    gap: 16px;
+    gap: 14px;
+    flex-shrink: 0;
   }
 
 
 
-  /* ── Live ticker — full width across header ── */
+  /* ── Live ticker — stretches from the logo's right edge to the start of
+     header-right. Uses flex:1 1 0 so it claims all available space and
+     scales fluidly when the viewport (or browser zoom) changes width. ── */
   .threat-ticker {
-    flex:0 0 800px;
+    flex: 1 1 0;
+    min-width: 0;
     font-family: var(--mono2);
-    font-size: 11px;
+    font-size: 12px;
     color: #ffffff;
-    padding: 5px 14px;
+    padding: 8px 16px;
     border: 1px solid var(--border2);
-    border-radius: 3px;
+    border-radius: 4px;
     background: rgba(0,0,0,0.3);
     white-space: nowrap;
     overflow: hidden;
     position: relative;
-    min-width: 0;
     display: flex;
     align-items: center;
-    gap: 0;
+    gap: 12px;
   }
   .ticker-live-label {
     color: var(--red);
     font-weight: 600;
-    margin-right: 10px;
+    letter-spacing: 1px;
     animation: blink 1.4s step-start infinite;
     flex-shrink: 0;
     position: relative;
@@ -834,6 +787,18 @@
   #refresh-btn:hover {
     background: rgba(0,212,255,0.12);
     box-shadow: 0 0 12px rgba(0,212,255,0.2);
+  }
+  #refresh-btn.refreshing {
+    /* Spin the glyph (the ⟳ at the start of the button) via the whole
+       button rotating won't work, so we use a CSS-only "swap with spinner"
+       by animating the entire text. Keep it short so it doesn't fight the
+       quick toast confirmation. */
+    animation: refresh-pulse 0.6s ease;
+  }
+  @keyframes refresh-pulse {
+    0%   { opacity: 0.6; }
+    50%  { opacity: 1; }
+    100% { opacity: 0.6; }
   }
 
   .status-pill {
@@ -2675,5 +2640,184 @@
   .user-row.clickable.active {
     background: rgba(0, 212, 255, 0.10);
     box-shadow: inset 3px 0 0 var(--accent);
+  }
+
+  /* ─────────────────────────────────────────────────────────────────────
+     Phase 6 — keyboard navigation, help overlay, responsive, focus rings
+     ───────────────────────────────────────────────────────────────────── */
+
+  /* Screen-reader-only — visible to assistive tech, off-screen for sighted. */
+  .visually-hidden {
+    position: absolute !important;
+    width: 1px; height: 1px;
+    padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0, 0, 0, 0);
+    white-space: nowrap; border: 0;
+  }
+
+  /* Keyboard-focused feed row: left rail + subtle row tint. Distinct from
+     the hover state so analysts can see the j/k cursor at a glance. */
+  tr.feed-row.kbd-focus > td {
+    background: rgba(0, 212, 255, 0.08);
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
+  html.light tr.feed-row.kbd-focus > td {
+    background: rgba(0, 153, 187, 0.10);
+  }
+
+  /* Improve keyboard focus visibility on all interactive controls.
+     Mouse clicks won't show this (browser :focus-visible handles that). */
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  /* Help overlay — `?` shortcut. */
+  #kbd-help-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(2px);
+    z-index: 20000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  #kbd-help-overlay[hidden] { display: none; }
+  .kbd-help-card {
+    width: min(560px, 100%);
+    max-height: 80vh;
+    overflow-y: auto;
+    background: var(--bg2);
+    border: 1px solid var(--border2);
+    border-radius: 8px;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+    font-family: var(--sans);
+    color: var(--text);
+  }
+  html.light .kbd-help-card { background: #fff; box-shadow: 0 24px 64px rgba(0, 0, 0, 0.18); }
+  .kbd-help-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+  }
+  .kbd-help-header h2 {
+    margin: 0;
+    font-size: 14px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--text3);
+    font-family: var(--mono2);
+  }
+  #kbd-help-close {
+    background: transparent;
+    border: 0;
+    color: var(--text2);
+    font-size: 16px;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 3px;
+  }
+  #kbd-help-close:hover { color: var(--text); background: rgba(255, 255, 255, 0.04); }
+  .kbd-help-body { padding: 12px 18px; }
+  .kbd-row {
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    gap: 12px;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px dashed var(--border);
+    font-size: 13px;
+  }
+  .kbd-row:last-child { border-bottom: 0; }
+  .kbd-keys { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .kbd-sep  { color: var(--text2); font-size: 11px; font-style: italic; }
+  .kbd-desc { color: var(--text); }
+  kbd {
+    display: inline-block;
+    min-width: 22px;
+    padding: 2px 7px;
+    font-family: var(--mono2);
+    font-size: 11px;
+    text-align: center;
+    background: var(--bg3);
+    border: 1px solid var(--border2);
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    color: var(--text);
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.3);
+  }
+  html.light kbd {
+    background: #f3f5f8;
+    border-color: #c4d1de;
+    color: #1a2838;
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.08);
+  }
+  .kbd-help-footer {
+    padding: 10px 18px;
+    border-top: 1px solid var(--border);
+    color: var(--text2);
+    font-size: 11px;
+    font-family: var(--mono2);
+  }
+
+  /* ── Responsive layout ───────────────────────────────────────────────── */
+
+  /* Narrow desktops / wide tablets — stack the two-column rows. */
+  @media (max-width: 1180px) {
+    .row-gauge-timeline,
+    .row-users-mitre,
+    .row-mitre-health,
+    .row-radar-campaigns {
+      grid-template-columns: 1fr !important;
+    }
+    .feed-toolbar { flex-wrap: wrap; gap: 8px; }
+    .feed-search { flex: 1 1 280px; min-width: 200px; }
+  }
+
+  /* Tablet / small screens — collapse to single column, tighter spacing,
+     scrollable tab strip, smaller stat banner. */
+  @media (max-width: 880px) {
+    .container, main { padding: 12px !important; }
+    .stat-banner {
+      grid-template-columns: repeat(2, 1fr) !important;
+      gap: 8px !important;
+    }
+    .tabs {
+      overflow-x: auto;
+      overflow-y: hidden;
+      white-space: nowrap;
+      flex-wrap: nowrap;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: thin;
+    }
+    .tab { flex: 0 0 auto; }
+    .header-right { gap: 8px; flex-wrap: wrap; }
+    .row-gauge-timeline,
+    .row-users-mitre,
+    .row-mitre-health,
+    .row-radar-campaigns,
+    .row-feed,
+    .row-campaigns {
+      grid-template-columns: 1fr !important;
+    }
+    /* Feed: drop low-priority columns so the table doesn't overflow. */
+    .feed-table th:nth-child(4), .feed-table td:nth-child(4),  /* host */
+    .feed-table th:nth-child(5), .feed-table td:nth-child(5) { /* IP   */
+      display: none;
+    }
+    .kbd-row { grid-template-columns: 130px 1fr; }
+  }
+
+  /* Phones — keep single column, ultra-tight stat banner, hide more cols. */
+  @media (max-width: 540px) {
+    .stat-banner { grid-template-columns: 1fr 1fr !important; }
+    .stat-value { font-size: 22px !important; }
+    .feed-table th:nth-child(6), .feed-table td:nth-child(6) { display: none; }
+    .kbd-help-card { max-height: 88vh; }
   }
 

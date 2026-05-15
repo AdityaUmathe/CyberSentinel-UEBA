@@ -852,15 +852,28 @@ def legacy_index():
 
 
 # SPA fallback — the client-side router activates the right tab based on the
-# URL. Anything that isn't /api/*, /assets/*, or /legacy returns index.html so
-# the dashboard can handle the routing in the browser.
+# URL. The order is:
+#   1. If a file with that exact path exists in dashboard/dist/ (e.g. logo
+#      images copied from public/, favicon.ico, etc.), serve it directly.
+#   2. Otherwise, if the first path segment is a known tab name, return
+#      index.html so the client router can activate the right tab.
+#   3. Otherwise, 404.
 SPA_TAB_PATHS = {"overview", "feed", "users", "campaigns", "endpoints", "false-positives"}
 
 @app.route("/<path:subpath>")
 def spa_fallback(subpath):
+    # 1. Real file in dist/ (Vite's public/ outputs land here at build time).
+    candidate = DASHBOARD_DIST / subpath
+    try:
+        if candidate.is_file() and candidate.resolve().is_relative_to(DASHBOARD_DIST.resolve()):
+            return send_from_directory(str(DASHBOARD_DIST), subpath)
+    except (OSError, ValueError):
+        pass
+    # 2. Known SPA tab — return index.html for client-side routing.
     head = subpath.split("/", 1)[0]
     if head in SPA_TAB_PATHS:
         return _serve_index()
+    # 3. Otherwise: not found.
     from flask import abort
     abort(404)
 
