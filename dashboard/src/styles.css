@@ -2227,78 +2227,42 @@
     color: var(--bg);
   }
 
-  /* Pattern-FP form (sits below the per-event FP form in the evidence panel).
-     Cyan accent to distinguish from the yellow per-event form. */
-  .fp-pat-form {
+  /* "Will also auto-suppress..." hint under the FP form. Shows the inferred
+     fingerprint chips so analysts see the blast radius before clicking. */
+  .fp-form-hint {
     margin-top: 10px;
-    background: rgba(88, 166, 255, 0.05);
-    border: 1px dashed rgba(88, 166, 255, 0.35);
+    padding: 8px 10px;
+    background: rgba(88, 166, 255, 0.04);
+    border-left: 2px solid rgba(88, 166, 255, 0.55);
+    border-radius: 0 3px 3px 0;
+    font-family: var(--mono2);
+    font-size: 11px;
+    color: var(--text2);
+    line-height: 1.55;
   }
-  .fp-pat-form .fp-form-title {
+  .fp-form-hint b {
     color: var(--accent, #58a6ff);
-  }
-  .fp-pat-hint {
-    font-size: 9px;
-    color: var(--text3);
-    text-transform: none;
-    letter-spacing: 0.5px;
-    margin-left: 6px;
-  }
-  .fp-pat-fingerprint {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    margin-bottom: 8px;
+    font-weight: 600;
   }
   .fp-pat-chip {
+    display: inline-block;
     background: rgba(0, 0, 0, 0.25);
     border: 1px solid var(--border);
     border-radius: 3px;
-    padding: 4px 10px;
+    padding: 2px 8px;
+    margin: 2px 3px;
     font-family: var(--mono2);
     font-size: 11px;
     color: var(--text2);
   }
   .fp-pat-chip b {
     color: var(--text3);
-    margin-right: 6px;
+    margin-right: 5px;
     font-weight: 600;
     letter-spacing: 0.5px;
   }
   html.light .fp-pat-chip {
     background: rgba(255, 255, 255, 0.7);
-  }
-  .fp-pat-scope {
-    display: flex;
-    gap: 16px;
-    margin-bottom: 8px;
-  }
-  .fp-pat-check {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-family: var(--mono2);
-    font-size: 11px;
-    color: var(--text2);
-    cursor: pointer;
-    user-select: none;
-  }
-  .fp-pat-check input[type="checkbox"] {
-    cursor: pointer;
-  }
-  .fp-pat-check input[type="checkbox"]:disabled + * ,
-  .fp-pat-check:has(input:disabled) {
-    opacity: 0.55;
-    cursor: not-allowed;
-  }
-  .fp-pat-submit {
-    background: rgba(88, 166, 255, 0.15) !important;
-    border-color: var(--accent, #58a6ff) !important;
-    color: var(--accent, #58a6ff) !important;
-  }
-  .fp-pat-submit:hover {
-    background: var(--accent, #58a6ff) !important;
-    color: var(--bg) !important;
   }
 
   /* Pattern-FP table on the False Positives page */

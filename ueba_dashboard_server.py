@@ -437,6 +437,46 @@ def _matching_pattern(alert: dict):
     return None
 
 
+def _pattern_from_alert(alert: dict, reason: str) -> dict | None:
+    """Build an FP pattern record from an alert's fingerprint
+    (signature_id + user + host.name). Returns None if signature_id is missing.
+    Empty user or host fall back to "*" (wildcard) so the pattern doesn't
+    accidentally key on null values.
+    """
+    sec = alert.get("security", {}) or {}
+    sig = str(sec.get("signature_id") or "").strip()
+    if not sig:
+        return None
+    user = (get_user(alert) or "").strip() or "*"
+    host = ((alert.get("host", {}) or {}).get("name") or "").strip() or "*"
+    return {
+        "id":           "fpp-" + uuid.uuid4().hex[:10],
+        "signature_id": sig,
+        "user":         user,
+        "agent":        host,
+        "reason":       reason or "auto-suppress from analyst FP mark",
+        "marked_at":    datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _add_pattern_if_new(candidate: dict | None):
+    """Append candidate to _fp_patterns unless an identical fingerprint exists.
+    Returns (record, was_new). If candidate is None or has no signature_id,
+    returns (None, False).
+    """
+    if not candidate or not candidate.get("signature_id"):
+        return None, False
+    with _fp_pat_lock:
+        for p in _fp_patterns:
+            if (str(p.get("signature_id")) == str(candidate["signature_id"]) and
+                (p.get("user") or "*") == candidate["user"] and
+                (p.get("agent") or "*") == candidate["agent"]):
+                return p, False
+        _fp_patterns.append(candidate)
+        save_fp_patterns()
+        return candidate, True
+
+
 def _read_alerts_from_disk(n: int | None = None) -> list:
     """Refresh the cache from disk and return the raw alert list (no FP filtering)."""
     global _alert_cache, _alert_cache_mtime
@@ -873,6 +913,11 @@ def list_false_positives():
 
 @app.route("/api/false-positive", methods=["POST"])
 def mark_false_positive():
+    """Mark a single alert as FP. Also auto-creates a suppression pattern
+    derived from the alert's (signature_id, user, agent) fingerprint so future
+    similar alerts are filtered out of the feed. The per-event record stays
+    around as an audit trail (which alert prompted the pattern).
+    """
     body = request.get_json(silent=True) or {}
     eid = (body.get("event_id") or "").strip()
     reason = (body.get("reason") or "").strip()
@@ -886,7 +931,20 @@ def mark_false_positive():
     with _fp_lock:
         _fp_dict[eid] = rec
         save_fps()
-    return jsonify({"ok": True, "record": rec})
+
+    # Auto-suppress similar alerts: derive a pattern from the underlying alert.
+    raw = _read_alerts_from_disk()
+    alert = next((a for a in raw if a.get("event_id") == eid), None)
+    pat, pat_new = (None, False)
+    if alert:
+        candidate = _pattern_from_alert(alert, reason)
+        pat, pat_new = _add_pattern_if_new(candidate)
+    return jsonify({
+        "ok":          True,
+        "record":      rec,
+        "pattern":     pat,       # None if alert missing or no signature_id
+        "pattern_new": pat_new,   # False if pattern already existed (dedupe)
+    })
 
 
 @app.route("/api/false-positive/<path:event_id>", methods=["DELETE"])
@@ -912,6 +970,9 @@ def _event_ids_in_campaign(campaign_id: str) -> list[str]:
 
 @app.route("/api/false-positive/campaign/<path:campaign_id>", methods=["POST"])
 def mark_campaign_false_positive(campaign_id):
+    """Mark every alert in a campaign as FP. Also auto-creates one pattern per
+    unique (signature_id, user, agent) fingerprint within the campaign so the
+    suppression follows similar alerts forward in time."""
     body = request.get_json(silent=True) or {}
     reason = (body.get("reason") or "").strip() \
              or f"campaign {campaign_id} marked as false positive"
@@ -923,7 +984,32 @@ def mark_campaign_false_positive(campaign_id):
         for eid in eids:
             _fp_dict[eid] = {"event_id": eid, "reason": reason, "marked_at": now}
         save_fps()
-    return jsonify({"ok": True, "marked": len(eids), "campaign_id": campaign_id})
+
+    # Auto-suppress: one pattern per unique fingerprint in the campaign.
+    raw = _read_alerts_from_disk()
+    by_id = {a.get("event_id"): a for a in raw}
+    seen: set = set()
+    patterns_new = 0
+    for eid in eids:
+        a = by_id.get(eid)
+        if not a:
+            continue
+        candidate = _pattern_from_alert(a, reason)
+        if not candidate:
+            continue
+        key = (candidate["signature_id"], candidate["user"], candidate["agent"])
+        if key in seen:
+            continue
+        seen.add(key)
+        _, was_new = _add_pattern_if_new(candidate)
+        if was_new:
+            patterns_new += 1
+    return jsonify({
+        "ok":           True,
+        "marked":       len(eids),
+        "campaign_id":  campaign_id,
+        "patterns_new": patterns_new,
+    })
 
 
 @app.route("/api/false-positive/campaign/<path:campaign_id>", methods=["DELETE"])
@@ -960,8 +1046,9 @@ def list_fp_patterns():
 
 @app.route("/api/false-positive-pattern", methods=["POST"])
 def mark_fp_pattern():
-    """Add a new FP pattern. Body: {signature_id, user, agent, reason}.
-    user/agent may be "*" for wildcard. If omitted/empty they default to "*"."""
+    """Add a new FP pattern directly (used by the FP review page's "add
+    custom pattern" affordance, if any). Body: {signature_id, user, agent,
+    reason}. user/agent default to "*" (wildcard) if omitted or empty."""
     body = request.get_json(silent=True) or {}
     sig = str(body.get("signature_id") or "").strip()
     user = (body.get("user") or "*").strip() or "*"
@@ -969,25 +1056,16 @@ def mark_fp_pattern():
     reason = (body.get("reason") or "").strip()
     if not sig:
         return jsonify({"ok": False, "error": "signature_id required"}), 400
-    new_id = "fpp-" + uuid.uuid4().hex[:10]
-    rec = {
-        "id":           new_id,
+    candidate = {
+        "id":           "fpp-" + uuid.uuid4().hex[:10],
         "signature_id": sig,
         "user":         user,
         "agent":        agent,
         "reason":       reason,
         "marked_at":    datetime.now(timezone.utc).isoformat(),
     }
-    with _fp_pat_lock:
-        # Dedupe: if the same (sig, user, agent) already exists, return existing.
-        for p in _fp_patterns:
-            if (str(p.get("signature_id")) == sig and
-                (p.get("user") or "*") == user and
-                (p.get("agent") or "*") == agent):
-                return jsonify({"ok": True, "record": p, "deduped": True})
-        _fp_patterns.append(rec)
-        save_fp_patterns()
-    return jsonify({"ok": True, "record": rec})
+    rec, was_new = _add_pattern_if_new(candidate)
+    return jsonify({"ok": True, "record": rec, "deduped": (not was_new)})
 
 
 @app.route("/api/false-positive-pattern/<pat_id>", methods=["DELETE"])

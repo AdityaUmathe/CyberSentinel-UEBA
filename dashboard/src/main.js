@@ -8,7 +8,7 @@
 import "./styles.css";
 
 import { state } from "./state.js";
-import { fetchAll, manualRefresh, markFP, unmarkFP, markCampaignFP, markPatternFP, unmarkPatternFP } from "./api.js";
+import { fetchAll, manualRefresh, markFP, unmarkFP, markCampaignFP, unmarkPatternFP } from "./api.js";
 import { initSse } from "./sse.js";
 import { initRouter } from "./router.js";
 import { showSkeletons } from "./ui/skeleton.js";
@@ -29,19 +29,6 @@ function __markFpFromForm(eventId, alertId) {
   const input = document.getElementById("fp-reason-" + alertId);
   const reason = (input && input.value || "").trim();
   markFP(eventId, reason);
-}
-
-// Submit a pattern-FP from the form inside an expanded evidence panel.
-// Reads the "Any user"/"Any host" checkboxes and reason input, computes the
-// final fingerprint (with "*" wildcards), then dispatches to markPatternFP.
-function __markPatternFpFromForm(alertId, sigId, alertUser, alertHost) {
-  const anyUser = document.getElementById("fp-pat-anyuser-" + alertId);
-  const anyHost = document.getElementById("fp-pat-anyhost-" + alertId);
-  const reasonInput = document.getElementById("fp-pat-reason-" + alertId);
-  const user  = (anyUser && anyUser.checked) ? "*" : (alertUser || "*");
-  const agent = (anyHost && anyHost.checked) ? "*" : (alertHost || "*");
-  const reason = (reasonInput && reasonInput.value || "").trim();
-  markPatternFP({ signature_id: sigId, user, agent, reason });
 }
 
 // Prompt the analyst for confirmation + an optional reason before bulk-marking
@@ -104,12 +91,10 @@ Object.assign(window, {
   markFP,
   unmarkFP,
   markCampaignFP,
-  markPatternFP,
   unmarkPatternFP,
   loadUserDetail,
   closeUserDetail,
   __markFpFromForm,
-  __markPatternFpFromForm,
   __markCampaignFpPrompt,
   __copyEvId,
 });

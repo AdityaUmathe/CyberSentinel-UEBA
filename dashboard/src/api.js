@@ -155,6 +155,9 @@ export async function markFP(eventId, reason = "") {
   if (!eventId) return;
   _applyLocalMark(eventId, reason);
   _repaintFpAffectedPanels();
+  // Initial toast — replaced with a richer "+ auto-suppression" message once
+  // the server responds (the server also creates a pattern from the alert's
+  // fingerprint so future similar alerts disappear).
   showToast("Marked as false positive", "success");
   try {
     const r = await fetch("/api/false-positive", {
@@ -166,7 +169,15 @@ export async function markFP(eventId, reason = "") {
     if (!r.ok || data.ok === false) {
       throw new Error((data && data.error) || `HTTP ${r.status}`);
     }
-    // Don't await — background reconciliation of stats/users/agents/campaigns.
+    if (data.pattern) {
+      const p = data.pattern;
+      const u = p.user === "*" ? "any user" : p.user;
+      const h = p.agent === "*" ? "any host" : p.agent;
+      const verb = data.pattern_new ? "Auto-suppressing" : "Already auto-suppressing";
+      showToast(`${verb} rule ${p.signature_id} / ${u} / ${h}`, "success");
+    }
+    // Don't await — background reconciliation of stats/users/agents/campaigns
+    // and refresh of the pattern list.
     fetchAll().catch(() => {});
   } catch (e) {
     showToast("Failed to mark FP: " + e.message, "error");
@@ -281,6 +292,9 @@ export async function markCampaignFP(campaignId, reason = "") {
     const data = await r.json();
     if (!r.ok || data.ok === false) {
       throw new Error((data && data.error) || `HTTP ${r.status}`);
+    }
+    if (data.patterns_new) {
+      showToast(`Auto-suppressing ${data.patterns_new} new pattern${data.patterns_new === 1 ? "" : "s"}`, "success");
     }
     fetchAll().catch(() => {});
   } catch (e) {
