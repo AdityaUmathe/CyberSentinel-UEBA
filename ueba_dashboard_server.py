@@ -438,22 +438,27 @@ def _matching_pattern(alert: dict):
 
 
 def _pattern_from_alert(alert: dict, reason: str) -> dict | None:
-    """Build an FP pattern record from an alert's fingerprint
-    (signature_id + user + host.name). Returns None if signature_id is missing.
-    Empty user or host fall back to "*" (wildcard) so the pattern doesn't
-    accidentally key on null values.
+    """Build an FP pattern record from an alert's fingerprint.
+
+    Default scope is `signature_id + user` (host wildcarded). This matches the
+    traditional SIEM expectation that marking "this rule for this user is
+    noise" applies wherever that user appears, not only on the specific host
+    that fired this instance. For host-attributed events with no user info,
+    `get_user()` already falls back to `host.name`, so the fingerprint
+    naturally becomes `signature_id + host` instead.
+
+    Returns None if signature_id is missing.
     """
     sec = alert.get("security", {}) or {}
     sig = str(sec.get("signature_id") or "").strip()
     if not sig:
         return None
     user = (get_user(alert) or "").strip() or "*"
-    host = ((alert.get("host", {}) or {}).get("name") or "").strip() or "*"
     return {
         "id":           "fpp-" + uuid.uuid4().hex[:10],
         "signature_id": sig,
         "user":         user,
-        "agent":        host,
+        "agent":        "*",
         "reason":       reason or "auto-suppress from analyst FP mark",
         "marked_at":    datetime.now(timezone.utc).isoformat(),
     }
@@ -1195,6 +1200,8 @@ def stream_alerts():
                             eid = alert.get("event_id")
                             if eid and eid in _fp_dict:
                                 continue   # already a known FP, don't push it
+                            if _matching_pattern(alert) is not None:
+                                continue   # auto-suppressed by a stored pattern
                             payload = _alert_to_feed_item(alert)
                             yield f"event: alert\ndata: {json.dumps(payload, default=str)}\n\n"
 

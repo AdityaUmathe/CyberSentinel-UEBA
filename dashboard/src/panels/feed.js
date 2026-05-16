@@ -40,11 +40,10 @@ export function buildEvidencePanel(ev, alertId, colSpan, eventId, signatureId, a
   const escFp = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const fpHint = (eventId && sigForFp) ? `
       <div class="fp-form-hint">
-        Marking this alert as FP will <b>also auto-suppress</b> future alerts matching
-        <span class="fp-pat-chip"><b>Rule</b> ${escFp(sigForFp)}</span>
-        <span class="fp-pat-chip"><b>User</b> ${escFp(userForFp)}</span>
-        <span class="fp-pat-chip"><b>Host</b> ${escFp(hostForFp)}</span>
-        — manage or remove in the False Positives tab.
+        Marking this alert as FP will <b>also auto-suppress</b> future alerts where
+        rule is <span class="fp-pat-chip"><b>${escFp(sigForFp)}</b></span>
+        <b>AND</b> user is <span class="fp-pat-chip"><b>${escFp(userForFp)}</b></span>
+        (host doesn't matter). Other rules from this user are unaffected. Manage in the False Positives tab.
       </div>` : "";
   const fpForm = eventId ? `
     <div class="fp-form" onclick="event.stopPropagation()">
