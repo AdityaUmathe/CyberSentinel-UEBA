@@ -39,9 +39,28 @@ export function buildEvidencePanel(ev, alertId, colSpan, eventId) {
         <button class="fp-form-submit" onclick="window.__markFpFromForm('${eidSafe}','${alertId}')">Mark FP</button>
       </div>
     </div>` : "";
+  // Event ID header bar — the first thing analysts need to pivot into the
+  // SIEM. Click-to-copy for one-step paste.
+  const eidDisplay = eventId || "—";
+  const eidHeader = eventId ? `
+    <div class="ev-eid-bar" onclick="event.stopPropagation()">
+      <div class="ev-eid-block">
+        <span class="ev-eid-label">SIEM Event ID</span>
+        <code class="ev-eid-value" id="eid-${alertId}">${eidDisplay}</code>
+      </div>
+      <button class="ev-eid-copy" type="button" aria-label="Copy event ID"
+              onclick="window.__copyEvId('${eidSafe}', this)">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <rect x="4.5" y="4.5" width="8" height="9" rx="1.4" stroke="currentColor" stroke-width="1.4"/>
+          <path d="M11.5 4.5V3a1 1 0 0 0-1-1H3.5a1 1 0 0 0-1 1v7.5a1 1 0 0 0 1 1H5" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" fill="none"/>
+        </svg>
+        <span>Copy</span>
+      </button>
+    </div>` : "";
   return `<tr class="ev-panel-row" id="ev-${alertId}"${evStyle}>
     <td colspan="${colSpan}">
       <div class="ev-panel">
+        ${eidHeader}
         <div class="ev-grid">
           <div class="ev-section">
             <div class="ev-section-title">◈ Signature &amp; Rule</div>

@@ -59,6 +59,24 @@ _DEFAULTS = {
         "max_tokens":  1000,
         "timeout_secs": 20,
     },
+    # Agent auto-discovery — periodically reads the Wazuh manager's
+    # `client.keys` to keep agents.json in sync with the SOC inventory.
+    #
+    # Reading the bind-mounted client.keys requires NO permission changes
+    # on the SOC server: the file is plain-text and world-readable by the
+    # `soc` user. If you ever want to switch to `agent_control -l`
+    # (richer: includes connection status), set remote_command to
+    # `docker exec cybersentinel-manager /var/ossec/bin/agent_control -l`
+    # and grant docker access. The poller auto-detects the format.
+    "agent_sync": {
+        "enabled":            True,
+        "poll_interval_secs": 60,
+        "ssh_host":           "soc@localhost",
+        "ssh_port":           2222,
+        "ssh_key":            "/root/.ssh/id_ueba",
+        "remote_command":     "cat /var/ossec/etc/client.keys",
+        "ssh_timeout_secs":   20,
+    },
 }
 
 
@@ -81,6 +99,9 @@ def load_dashboard_config(config_path: str | None) -> dict:
     for k, v in dash.items():
         if k == "ai_analyst" and isinstance(v, dict):
             cfg["ai_analyst"].update(v)
+        elif k == "agent_sync" and isinstance(v, dict):
+            cfg.setdefault("agent_sync", dict(_DEFAULTS["agent_sync"]))
+            cfg["agent_sync"].update(v)
         else:
             cfg[k] = v
     return cfg
@@ -115,6 +136,212 @@ _alert_cache_mtime: float = 0.0
 # Maps event_id -> {"event_id": ..., "reason": "...", "marked_at": "..."}
 _fp_lock = __import__("threading").Lock()
 _fp_dict: dict = {}
+
+# ── Agent sync state (populated by the background poller) ────────────────────
+_agent_sync_last_at: str = ""           # ISO timestamp of last successful poll
+_agent_sync_last_error: str = ""        # last error message (for /api/health)
+_agent_sync_lock = __import__("threading").Lock()
+
+
+def _parse_client_keys(stdout: str) -> list[dict]:
+    """Parse a Wazuh `client.keys` file into [{id, name, ip}].
+
+    Format is one agent per line: `<id> <name> <ip|"any"> <key>`. Lines
+    starting with `#` or `!` (revoked) are skipped. IDs `000` / `0` are
+    the manager itself and are skipped too.
+    """
+    out: list[dict] = []
+    for raw in stdout.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or line.startswith("!"):
+            continue
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        agent_id, name, ip = parts[0], parts[1], parts[2]
+        if agent_id in ("000", "0"):
+            continue
+        # `any` is Wazuh's placeholder when no fixed IP was configured.
+        if ip.lower() == "any":
+            ip = ""
+        else:
+            ip = ip.split("/")[0]   # drop /netmask if present
+        out.append({
+            "id":     agent_id,
+            "name":   name,
+            "ip":     ip,
+            "status": "",            # client.keys doesn't carry status
+        })
+    return out
+
+
+def _parse_agent_control_l(stdout: str) -> list[dict]:
+    """Parse the output of `agent_control -l` into a list of {id, name, ip} dicts.
+
+    Wazuh's typical output format:
+
+        Wazuh agent_control. List of available agents:
+           ID: 000, Name: cybersentinel-manager (server), IP: 127.0.0.1, Active/Local
+           ID: 001, Name: Sparta1, IP: 10.200.11.106/any, Active
+           ID: 002, Name: KAFKA_ME_P, IP: 10.200.10.174, Disconnected
+        ...
+
+    Server-self entry (ID 000) is skipped — it isn't a real endpoint.
+    """
+    import re as _re
+    line_re = _re.compile(
+        r"ID:\s*(?P<id>\S+)\s*,\s*"
+        r"Name:\s*(?P<name>.+?)(?:\s*\([^)]+\))?\s*,\s*"
+        r"IP:\s*(?P<ip>[^,\s]+)\s*,\s*"
+        r"(?P<status>.+?)\s*$"
+    )
+    out: list[dict] = []
+    for raw in stdout.splitlines():
+        line = raw.strip()
+        if not line or not line.lstrip().startswith("ID:"):
+            continue
+        m = line_re.match(line)
+        if not m:
+            continue
+        agent_id = m.group("id").strip()
+        if agent_id in ("000", "0"):
+            continue                                # skip the manager itself
+        ip = m.group("ip").split("/")[0]            # strip /any or /netmask
+        out.append({
+            "id":     agent_id,
+            "name":   m.group("name").strip(),
+            "ip":     ip,
+            "status": m.group("status").strip().lower(),
+        })
+    return out
+
+
+def _fetch_agents_from_soc() -> tuple[list[dict] | None, str]:
+    """SSH to the SOC server and run `agent_control -l`, parse the result.
+
+    Returns (agents, error_message). On success error_message is "".
+    On failure agents is None and error_message describes the problem.
+    """
+    cfg = CFG.get("agent_sync") or _DEFAULTS["agent_sync"]
+    cmd = [
+        "ssh",
+        "-p", str(cfg["ssh_port"]),
+        "-i", cfg["ssh_key"],
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "BatchMode=yes",
+        "-o", f"ConnectTimeout={int(cfg['ssh_timeout_secs'])}",
+        cfg["ssh_host"],
+        cfg["remote_command"],
+    ]
+    try:
+        import subprocess
+        r = subprocess.run(
+            cmd, capture_output=True, text=True,
+            timeout=int(cfg["ssh_timeout_secs"]) + 5,
+        )
+    except Exception as e:
+        return None, f"ssh failed: {e}"
+    if r.returncode != 0:
+        # Surface stderr (first line) so the operator can fix permissions.
+        err = (r.stderr or "").strip().splitlines()[:1]
+        return None, f"remote command rc={r.returncode}: {' / '.join(err)}"
+    # Auto-detect the output format. client.keys lines start with the
+    # agent id followed by a space; agent_control lines start with "ID:".
+    stdout = r.stdout
+    agents = _parse_client_keys(stdout)
+    if not agents:
+        agents = _parse_agent_control_l(stdout)
+    if not agents:
+        return None, "remote command returned no parseable agents"
+    return agents, ""
+
+
+def _merge_agents(fresh: list[dict], existing_path: Path) -> list[dict]:
+    """Merge `fresh` (from agent_control) with existing agents.json entries.
+
+    Preserves fields the CLI doesn't return — most importantly `os` — by
+    keying on agent id. New agents picked up from Wazuh just won't have
+    those fields until the operator fills them in (or we extend the
+    poller to call `agent_control -i <id>` for OS info).
+    """
+    by_id: dict = {}
+    if existing_path.exists():
+        try:
+            for rec in json.loads(existing_path.read_text(encoding="utf-8") or "[]"):
+                if isinstance(rec, dict) and rec.get("id"):
+                    by_id[str(rec["id"])] = dict(rec)
+        except Exception:
+            pass
+    fresh_ids: set = set()
+    out: list[dict] = []
+    for a in fresh:
+        aid = str(a["id"])
+        fresh_ids.add(aid)
+        merged = dict(by_id.get(aid, {}))
+        # Always trust the manager for id + name. For ip/status, only
+        # overwrite when fresh has a real value — client.keys can return
+        # empty strings (e.g. when an agent's IP is configured as "any"
+        # or status isn't available from the file).
+        merged["id"]   = aid
+        merged["name"] = a["name"]
+        if a.get("ip"):
+            merged["ip"] = a["ip"]
+        elif "ip" not in merged:
+            merged["ip"] = ""
+        if a.get("status"):
+            merged["status"] = a["status"]
+        out.append(merged)
+    # Sort by numeric id for stable ordering.
+    out.sort(key=lambda r: (int(r["id"]) if str(r["id"]).isdigit() else 9999, r["id"]))
+    return out
+
+
+def _write_agents_atomically(path: Path, agents: list[dict]) -> None:
+    """Write agents.json with a tmp+rename so a reader never sees a half file."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(agents, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+def _agent_sync_poll() -> None:
+    """One round of the agent sync — runs in the background thread."""
+    global _agent_sync_last_at, _agent_sync_last_error
+    fresh, err = _fetch_agents_from_soc()
+    with _agent_sync_lock:
+        if err:
+            _agent_sync_last_error = err
+            print(f"[agent-sync] failed: {err}", flush=True)
+            return
+        try:
+            merged = _merge_agents(fresh, AGENTS_REGISTRY)
+            _write_agents_atomically(AGENTS_REGISTRY, merged)
+            _agent_sync_last_at    = datetime.now(timezone.utc).isoformat()
+            _agent_sync_last_error = ""
+            print(f"[agent-sync] wrote {len(merged)} agents to {AGENTS_REGISTRY}", flush=True)
+        except Exception as e:
+            _agent_sync_last_error = f"write failed: {e}"
+            print(f"[agent-sync] write failed: {e}", flush=True)
+
+
+def _start_agent_sync_thread() -> None:
+    """Spawn the agent-sync background thread (daemon, won't block shutdown)."""
+    import threading
+    cfg = CFG.get("agent_sync") or _DEFAULTS["agent_sync"]
+    if not cfg.get("enabled"):
+        print("[agent-sync] disabled in config")
+        return
+    interval = max(15, int(cfg.get("poll_interval_secs", 60)))
+
+    def _loop():
+        # Do one fetch immediately so first request after startup is fresh.
+        _agent_sync_poll()
+        while True:
+            time.sleep(interval)
+            _agent_sync_poll()
+
+    t = threading.Thread(target=_loop, name="agent-sync", daemon=True)
+    t.start()
+    print(f"[agent-sync] polling every {interval}s — `{cfg['remote_command']}`")
 
 
 def load_fps() -> None:
@@ -681,6 +908,13 @@ def health():
     # "Engine live" = at least one alert within the last 5 minutes.
     engine_live = bool(newest_dt and (now - newest_dt).total_seconds() < 300)
 
+    with _agent_sync_lock:
+        agent_sync_status = {
+            "enabled":    bool((CFG.get("agent_sync") or {}).get("enabled")),
+            "last_at":    _agent_sync_last_at,
+            "last_error": _agent_sync_last_error,
+        }
+
     return jsonify({
         "total_alerts":           total,
         "alerts_1h":              alerts_1h,
@@ -692,6 +926,7 @@ def health():
         "server_started_at":      _SERVER_STARTED_AT,
         "uptime_secs":            uptime,
         "engine_live":            engine_live,
+        "agent_sync":             agent_sync_status,
     })
 
 
@@ -919,6 +1154,7 @@ def main() -> None:
     print(f"  AI analyst:       "
           f"{'enabled' if CFG['ai_analyst'].get('enabled') and os.environ.get('ANTHROPIC_API_KEY') else 'fallback only'}")
     print(f"  Listening on:     http://{CFG['host']}:{CFG['port']}")
+    _start_agent_sync_thread()
     app.run(host=CFG["host"], port=CFG["port"], debug=args.debug)
 
 

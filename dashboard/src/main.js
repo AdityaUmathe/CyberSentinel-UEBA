@@ -44,6 +44,39 @@ function __markCampaignFpPrompt(campaignId, alertCount) {
   markCampaignFP(campaignId, reason.trim());
 }
 
+// Copy SIEM event ID to clipboard with a brief visual confirmation on the
+// button that was clicked.
+function __copyEvId(eid, btn) {
+  if (!eid) return;
+  const done = (ok) => {
+    if (!btn) return;
+    const span = btn.querySelector("span");
+    const orig = span ? span.textContent : null;
+    btn.classList.add(ok ? "copied" : "copy-failed");
+    if (span) span.textContent = ok ? "Copied" : "Failed";
+    setTimeout(() => {
+      btn.classList.remove("copied", "copy-failed");
+      if (span && orig != null) span.textContent = orig;
+    }, 1200);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(eid).then(() => done(true)).catch(() => done(false));
+  } else {
+    // Fallback for non-HTTPS / older browsers.
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = eid;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      done(ok);
+    } catch (e) { done(false); }
+  }
+}
+
 // ── Expose inline-handler functions on window ────────────────────────────────
 Object.assign(window, {
   manualRefresh,
@@ -62,6 +95,7 @@ Object.assign(window, {
   closeUserDetail,
   __markFpFromForm,
   __markCampaignFpPrompt,
+  __copyEvId,
 });
 
 // ── Init subsystems (order matters for theme + footer DOM access) ────────────
