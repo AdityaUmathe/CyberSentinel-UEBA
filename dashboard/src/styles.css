@@ -2227,6 +2227,102 @@
     color: var(--bg);
   }
 
+  /* Pattern-FP form (sits below the per-event FP form in the evidence panel).
+     Cyan accent to distinguish from the yellow per-event form. */
+  .fp-pat-form {
+    margin-top: 10px;
+    background: rgba(88, 166, 255, 0.05);
+    border: 1px dashed rgba(88, 166, 255, 0.35);
+  }
+  .fp-pat-form .fp-form-title {
+    color: var(--accent, #58a6ff);
+  }
+  .fp-pat-hint {
+    font-size: 9px;
+    color: var(--text3);
+    text-transform: none;
+    letter-spacing: 0.5px;
+    margin-left: 6px;
+  }
+  .fp-pat-fingerprint {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+  }
+  .fp-pat-chip {
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 4px 10px;
+    font-family: var(--mono2);
+    font-size: 11px;
+    color: var(--text2);
+  }
+  .fp-pat-chip b {
+    color: var(--text3);
+    margin-right: 6px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+  }
+  html.light .fp-pat-chip {
+    background: rgba(255, 255, 255, 0.7);
+  }
+  .fp-pat-scope {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 8px;
+  }
+  .fp-pat-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--mono2);
+    font-size: 11px;
+    color: var(--text2);
+    cursor: pointer;
+    user-select: none;
+  }
+  .fp-pat-check input[type="checkbox"] {
+    cursor: pointer;
+  }
+  .fp-pat-check input[type="checkbox"]:disabled + * ,
+  .fp-pat-check:has(input:disabled) {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+  .fp-pat-submit {
+    background: rgba(88, 166, 255, 0.15) !important;
+    border-color: var(--accent, #58a6ff) !important;
+    color: var(--accent, #58a6ff) !important;
+  }
+  .fp-pat-submit:hover {
+    background: var(--accent, #58a6ff) !important;
+    color: var(--bg) !important;
+  }
+
+  /* Pattern-FP table on the False Positives page */
+  .fp-pat-rule {
+    font-family: var(--mono2);
+    font-size: 12px;
+    background: rgba(88, 166, 255, 0.08);
+    color: var(--accent, #58a6ff);
+    padding: 2px 8px;
+    border-radius: 3px;
+  }
+  .fp-pat-wild {
+    font-family: var(--mono2);
+    font-size: 11px;
+    color: var(--text3);
+    font-style: italic;
+  }
+  .fp-pat-matched {
+    font-family: var(--mono2);
+    font-size: 12px;
+    color: var(--yellow);
+    font-weight: 600;
+  }
+
   /* "Show FPs" inline toggle in the feed filter bar */
   .fp-toggle {
     display: inline-flex;

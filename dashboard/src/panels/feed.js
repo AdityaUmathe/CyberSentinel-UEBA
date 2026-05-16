@@ -12,7 +12,7 @@ function evRow(label, value, highlight) {
   }">${val}</span></div>`;
 }
 
-export function buildEvidencePanel(ev, alertId, colSpan, eventId) {
+export function buildEvidencePanel(ev, alertId, colSpan, eventId, signatureId, alertUser, alertHost) {
   colSpan = colSpan || 9;
   // Persist expanded/collapsed state across re-renders.
   const expanded = state.expandedRows.has(alertId);
@@ -37,6 +37,41 @@ export function buildEvidencePanel(ev, alertId, colSpan, eventId) {
       <div class="fp-form-row">
         <input id="fp-reason-${alertId}" class="fp-form-input" placeholder="Reason (optional) — e.g. expected RDP from admin desk" maxlength="240"/>
         <button class="fp-form-submit" onclick="window.__markFpFromForm('${eidSafe}','${alertId}')">Mark FP</button>
+      </div>
+    </div>` : "";
+
+  // Pattern-FP form — auto-suppress every future alert with this fingerprint.
+  // Disabled (greyed out) when signature_id is missing; we can't fingerprint
+  // by a null rule_id. Empty user/host force the corresponding wildcard.
+  const sigForFp = signatureId || sig.rule_id || "";
+  const userForFp = (alertUser || "").trim();
+  const hostForFp = (alertHost || "").trim();
+  const userMissing = !userForFp;
+  const hostMissing = !hostForFp;
+  const sigStr  = String(sigForFp).replace(/'/g, "\\'");
+  const userStr = userForFp.replace(/'/g, "\\'");
+  const hostStr = hostForFp.replace(/'/g, "\\'");
+  const patForm = sigForFp ? `
+    <div class="fp-form fp-pat-form" onclick="event.stopPropagation()">
+      <div class="fp-form-title">Auto-suppress similar alerts <span class="fp-pat-hint">(matches by rule + user + host)</span></div>
+      <div class="fp-pat-fingerprint">
+        <span class="fp-pat-chip"><b>Rule</b> ${sigForFp}</span>
+        <span class="fp-pat-chip"><b>User</b> ${userForFp || "—"}</span>
+        <span class="fp-pat-chip"><b>Host</b> ${hostForFp || "—"}</span>
+      </div>
+      <div class="fp-pat-scope">
+        <label class="fp-pat-check">
+          <input type="checkbox" id="fp-pat-anyuser-${alertId}" ${userMissing ? "checked disabled" : ""}/>
+          Any user
+        </label>
+        <label class="fp-pat-check">
+          <input type="checkbox" id="fp-pat-anyhost-${alertId}" ${hostMissing ? "checked disabled" : ""}/>
+          Any host
+        </label>
+      </div>
+      <div class="fp-form-row">
+        <input id="fp-pat-reason-${alertId}" class="fp-form-input" placeholder="Reason (optional) — e.g. weekly vulnerability scan" maxlength="240"/>
+        <button class="fp-form-submit fp-pat-submit" onclick="window.__markPatternFpFromForm('${alertId}','${sigStr}','${userStr}','${hostStr}')">Save pattern</button>
       </div>
     </div>` : "";
   // Event ID header bar — the first thing analysts need to pivot into the
@@ -109,6 +144,7 @@ export function buildEvidencePanel(ev, alertId, colSpan, eventId) {
           </div>
         </div>
         ${fpForm}
+        ${patForm}
       </div>
     </td>
   </tr>`;
@@ -158,7 +194,7 @@ export function feedRows(alerts, colSpan, idPrefix) {
         <td>${a.campaign_id ? `<span class="camp-tag">${a.campaign_id}</span>` : "—"}</td>
         <td class="sig-cell"><div class="sig-cell-inner"><span class="sig-text">${a.signature || "—"}</span>${fpBtn}</div></td>
       </tr>`);
-    rows.push(buildEvidencePanel(a.evidence, alertId, colSpan, a.event_id));
+    rows.push(buildEvidencePanel(a.evidence, alertId, colSpan, a.event_id, a.signature_id, a.user, a.host));
   });
   return rows.join("");
 }

@@ -1,10 +1,51 @@
 // False Positives tab — lists every FP-marked alert with the original alert
 // data merged in, plus an "Unmark" button to restore each one to the feed.
+// Also renders the pattern-FP table (signature_id + user + agent fingerprints
+// that auto-suppress future matching alerts).
 
 import { state } from "../state.js";
 import { fmtTime, fmtDate, scoreColor, verdictClass, verdictLabel } from "../helpers.js";
 
 export function renderFalsePositives() {
+  renderFpPatterns();
+  renderFpEvents();
+}
+
+function renderFpPatterns() {
+  const tbody = document.getElementById("fp-pat-tbody");
+  const badge = document.getElementById("fp-pat-badge");
+  if (!tbody) return;
+
+  const pats = state.fpPatterns || [];
+  if (badge) badge.textContent = pats.length;
+
+  if (!pats.length) {
+    tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state" style="padding:20px 12px">
+      <p>NO AUTO-SUPPRESSION PATTERNS</p>
+      <p style="font-family:var(--mono2);font-size:10px;color:var(--text3);margin-top:8px;letter-spacing:0.6px">
+        Expand any alert and click <b>Save pattern</b> to fingerprint similar alerts and suppress them automatically.
+      </p>
+    </div></td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = pats.map((p) => {
+    const idSafe = (p.id || "").replace(/'/g, "\\'");
+    const userDisp  = (p.user  === "*" || !p.user)  ? '<span class="fp-pat-wild">any</span>' : escapeHtml(p.user);
+    const agentDisp = (p.agent === "*" || !p.agent) ? '<span class="fp-pat-wild">any</span>' : escapeHtml(p.agent);
+    return `<tr class="fp-row-record">
+      <td><code class="fp-pat-rule">${escapeHtml(p.signature_id)}</code></td>
+      <td class="user-cell">${userDisp}</td>
+      <td>${agentDisp}</td>
+      <td class="fp-reason-cell">${p.reason ? `<span class="fp-reason-text">${escapeHtml(p.reason)}</span>` : '<span class="fp-reason-empty">—</span>'}</td>
+      <td><span class="fp-pat-matched">${(p.matched || 0).toLocaleString()}</span></td>
+      <td class="time-cell">${fmtDate(p.marked_at)}</td>
+      <td><button class="fp-restore-btn" onclick="unmarkPatternFP('${idSafe}')">× Remove</button></td>
+    </tr>`;
+  }).join("");
+}
+
+function renderFpEvents() {
   const tbody = document.getElementById("fp-tbody");
   const badge = document.getElementById("fp-tab-badge");
   const navBadge = document.getElementById("fp-nav-badge");
@@ -12,7 +53,7 @@ export function renderFalsePositives() {
 
   const fps = state.falsePositives || [];
   if (badge)    badge.textContent    = fps.length;
-  if (navBadge) navBadge.textContent = fps.length;
+  if (navBadge) navBadge.textContent = fps.length + ((state.fpPatterns || []).length);
 
   if (!fps.length) {
     tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state" style="padding:30px 12px">

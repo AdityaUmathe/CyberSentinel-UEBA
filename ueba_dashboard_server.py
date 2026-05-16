@@ -25,6 +25,7 @@ import argparse
 import json
 import os
 import time
+import uuid
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -51,6 +52,7 @@ _DEFAULTS = {
     "alerts_file":     "/root/NEW_DRIVE/aditya_ueba/ueba_alerts.jsonl",
     "agents_registry": "/root/NEW_DRIVE/aditya_ueba/agents.json",
     "false_positives_file": "/root/NEW_DRIVE/aditya_ueba/false_positives.json",
+    "fp_patterns_file":     "/root/NEW_DRIVE/aditya_ueba/fp_patterns.json",
     "max_alerts":      10000,
     "cache_ttl_secs":  10,
     "ai_analyst": {
@@ -127,6 +129,7 @@ CFG["ai_analyst"] = dict(_DEFAULTS["ai_analyst"])
 ALERTS_FILE: Path     = Path(_DEFAULTS["alerts_file"])
 AGENTS_REGISTRY: Path = Path(_DEFAULTS["agents_registry"])
 FP_FILE: Path         = Path(_DEFAULTS["false_positives_file"])
+FP_PATTERNS_FILE: Path = Path(_DEFAULTS["fp_patterns_file"])
 
 # ── Alert cache — avoids reading the full file on every API request ──
 _alert_cache: list = []
@@ -136,6 +139,13 @@ _alert_cache_mtime: float = 0.0
 # Maps event_id -> {"event_id": ..., "reason": "...", "marked_at": "..."}
 _fp_lock = __import__("threading").Lock()
 _fp_dict: dict = {}
+
+# ── False-positive pattern store ─────────────────────────────────────────────
+# Each pattern is a fingerprint that auto-suppresses any future alert matching
+# (signature_id, user, agent). User and agent each default to "*" (wildcard).
+# Persisted to FP_PATTERNS_FILE atomically.
+_fp_pat_lock = __import__("threading").Lock()
+_fp_patterns: list = []  # list of dicts: {id, signature_id, user, agent, reason, marked_at}
 
 # ── Agent sync state (populated by the background poller) ────────────────────
 _agent_sync_last_at: str = ""           # ISO timestamp of last successful poll
@@ -372,6 +382,61 @@ def save_fps() -> None:
         print(f"[dashboard] failed to persist FPs to {FP_FILE}: {e}")
 
 
+def load_fp_patterns() -> None:
+    """Load FP patterns from disk into _fp_patterns."""
+    global _fp_patterns
+    if not FP_PATTERNS_FILE.exists():
+        _fp_patterns = []
+        return
+    try:
+        data = json.loads(FP_PATTERNS_FILE.read_text(encoding="utf-8") or "[]")
+        if isinstance(data, list):
+            _fp_patterns = [p for p in data if isinstance(p, dict) and p.get("signature_id")]
+        else:
+            _fp_patterns = []
+    except Exception as e:
+        print(f"[dashboard] failed to load FP patterns {FP_PATTERNS_FILE}: {e}")
+        _fp_patterns = []
+
+
+def save_fp_patterns() -> None:
+    """Atomically write _fp_patterns to FP_PATTERNS_FILE."""
+    tmp = FP_PATTERNS_FILE.with_suffix(FP_PATTERNS_FILE.suffix + ".tmp")
+    try:
+        FP_PATTERNS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(_fp_patterns, indent=2), encoding="utf-8")
+        tmp.replace(FP_PATTERNS_FILE)
+    except Exception as e:
+        print(f"[dashboard] failed to persist FP patterns to {FP_PATTERNS_FILE}: {e}")
+
+
+def _alert_matches_pattern(alert: dict, pattern: dict) -> bool:
+    """Return True iff alert matches the (signature_id, user, agent) fingerprint.
+    A pattern field equal to "*" is treated as a wildcard.
+    """
+    sec = alert.get("security", {}) or {}
+    if str(sec.get("signature_id") or "") != str(pattern.get("signature_id") or ""):
+        return False
+    p_user = pattern.get("user") or "*"
+    if p_user != "*" and get_user(alert) != p_user:
+        return False
+    p_agent = pattern.get("agent") or "*"
+    host_name = (alert.get("host", {}) or {}).get("name") or ""
+    if p_agent != "*" and host_name != p_agent:
+        return False
+    return True
+
+
+def _matching_pattern(alert: dict):
+    """Return the first FP pattern matching this alert, or None."""
+    if not _fp_patterns:
+        return None
+    for p in _fp_patterns:
+        if _alert_matches_pattern(alert, p):
+            return p
+    return None
+
+
 def _read_alerts_from_disk(n: int | None = None) -> list:
     """Refresh the cache from disk and return the raw alert list (no FP filtering)."""
     global _alert_cache, _alert_cache_mtime
@@ -406,14 +471,24 @@ def _read_alerts_from_disk(n: int | None = None) -> list:
 
 
 def load_alerts(n: int | None = None, include_fp: bool = False) -> list:
-    """Load alerts. By default filters out any alert whose event_id is FP-marked.
-    Pass include_fp=True to opt out of that filter (used by the "show FPs"
-    feed view and by /api/false-positives).
+    """Load alerts. By default filters out any alert that is FP-marked, either
+    by event_id (per-instance) or by a stored fingerprint pattern
+    (signature_id + user + agent). Pass include_fp=True to opt out (used by
+    the "show FPs" feed view and by /api/false-positives).
     """
     raw = _read_alerts_from_disk(n)
-    if include_fp or not _fp_dict:
+    if include_fp:
         return raw
-    return [a for a in raw if a.get("event_id") not in _fp_dict]
+    if not _fp_dict and not _fp_patterns:
+        return raw
+    out = []
+    for a in raw:
+        if a.get("event_id") in _fp_dict:
+            continue
+        if _matching_pattern(a) is not None:
+            continue
+        out.append(a)
+    return out
 
 
 def _wants_include_fp() -> bool:
@@ -544,6 +619,7 @@ def _alert_to_feed_item(a: dict) -> dict:
         "mitre_tactic": (a.get("context", {}) or {}).get("raw_event", {}).get("rule", {}).get("mitre", {}).get("tactic", []),
         "evidence":     a.get("evidence", {}),
         "fp":           _fp_dict.get(eid) if eid else None,
+        "fp_pattern":   _matching_pattern(a),
     }
 
 
@@ -863,6 +939,68 @@ def unmark_campaign_false_positive(campaign_id):
     return jsonify({"ok": True, "removed": removed, "campaign_id": campaign_id})
 
 
+# ── False-positive PATTERN management ────────────────────────────────────────
+# Patterns auto-suppress any future alert whose (signature_id, user, agent)
+# fingerprint matches. Wildcard "*" on user or agent broadens the scope.
+@app.route("/api/false-positive-patterns")
+def list_fp_patterns():
+    """Return all FP patterns with a `matched` count over the loaded alerts."""
+    raw = load_alerts(include_fp=True)
+    counts: dict = {}
+    for a in raw:
+        p = _matching_pattern(a)
+        if p:
+            counts[p.get("id")] = counts.get(p.get("id"), 0) + 1
+    out = []
+    for p in _fp_patterns:
+        out.append({**p, "matched": counts.get(p.get("id"), 0)})
+    out.sort(key=lambda r: r.get("marked_at", ""), reverse=True)
+    return jsonify(out)
+
+
+@app.route("/api/false-positive-pattern", methods=["POST"])
+def mark_fp_pattern():
+    """Add a new FP pattern. Body: {signature_id, user, agent, reason}.
+    user/agent may be "*" for wildcard. If omitted/empty they default to "*"."""
+    body = request.get_json(silent=True) or {}
+    sig = str(body.get("signature_id") or "").strip()
+    user = (body.get("user") or "*").strip() or "*"
+    agent = (body.get("agent") or "*").strip() or "*"
+    reason = (body.get("reason") or "").strip()
+    if not sig:
+        return jsonify({"ok": False, "error": "signature_id required"}), 400
+    new_id = "fpp-" + uuid.uuid4().hex[:10]
+    rec = {
+        "id":           new_id,
+        "signature_id": sig,
+        "user":         user,
+        "agent":        agent,
+        "reason":       reason,
+        "marked_at":    datetime.now(timezone.utc).isoformat(),
+    }
+    with _fp_pat_lock:
+        # Dedupe: if the same (sig, user, agent) already exists, return existing.
+        for p in _fp_patterns:
+            if (str(p.get("signature_id")) == sig and
+                (p.get("user") or "*") == user and
+                (p.get("agent") or "*") == agent):
+                return jsonify({"ok": True, "record": p, "deduped": True})
+        _fp_patterns.append(rec)
+        save_fp_patterns()
+    return jsonify({"ok": True, "record": rec})
+
+
+@app.route("/api/false-positive-pattern/<pat_id>", methods=["DELETE"])
+def unmark_fp_pattern(pat_id):
+    with _fp_pat_lock:
+        before = len(_fp_patterns)
+        _fp_patterns[:] = [p for p in _fp_patterns if p.get("id") != pat_id]
+        removed = before - len(_fp_patterns)
+        if removed:
+            save_fp_patterns()
+    return jsonify({"ok": True, "removed": bool(removed)})
+
+
 # ── Engine health ────────────────────────────────────────────────────────────
 @app.route("/api/health")
 def health():
@@ -1124,25 +1262,30 @@ def _parse_args() -> argparse.Namespace:
                    help="Path to agents.json (overrides config)")
     p.add_argument("--fp-file", default=None,
                    help="Path to false_positives.json (overrides config)")
+    p.add_argument("--fp-patterns-file", default=None,
+                   help="Path to fp_patterns.json (overrides config)")
     p.add_argument("--debug", action="store_true", help="Run Flask in debug mode")
     return p.parse_args()
 
 
 def main() -> None:
-    global CFG, ALERTS_FILE, AGENTS_REGISTRY, FP_FILE
+    global CFG, ALERTS_FILE, AGENTS_REGISTRY, FP_FILE, FP_PATTERNS_FILE
     args = _parse_args()
     CFG = load_dashboard_config(args.config)
 
-    if args.host:            CFG["host"] = args.host
-    if args.port:            CFG["port"] = args.port
-    if args.alerts:          CFG["alerts_file"] = args.alerts
-    if args.agents_registry: CFG["agents_registry"] = args.agents_registry
-    if args.fp_file:         CFG["false_positives_file"] = args.fp_file
+    if args.host:             CFG["host"] = args.host
+    if args.port:             CFG["port"] = args.port
+    if args.alerts:           CFG["alerts_file"] = args.alerts
+    if args.agents_registry:  CFG["agents_registry"] = args.agents_registry
+    if args.fp_file:          CFG["false_positives_file"] = args.fp_file
+    if args.fp_patterns_file: CFG["fp_patterns_file"] = args.fp_patterns_file
 
-    ALERTS_FILE     = Path(CFG["alerts_file"])
-    AGENTS_REGISTRY = Path(CFG["agents_registry"])
-    FP_FILE         = Path(CFG["false_positives_file"])
+    ALERTS_FILE       = Path(CFG["alerts_file"])
+    AGENTS_REGISTRY   = Path(CFG["agents_registry"])
+    FP_FILE           = Path(CFG["false_positives_file"])
+    FP_PATTERNS_FILE  = Path(CFG.get("fp_patterns_file") or _DEFAULTS["fp_patterns_file"])
     load_fps()
+    load_fp_patterns()
 
     dist_ok = (DASHBOARD_DIST / "index.html").exists()
     print("CyberSentinel UEBA Dashboard")
@@ -1150,6 +1293,7 @@ def main() -> None:
     print(f"  Reading alerts:   {ALERTS_FILE}")
     print(f"  Agents registry:  {AGENTS_REGISTRY}")
     print(f"  False positives:  {FP_FILE}  ({len(_fp_dict)} loaded)")
+    print(f"  FP patterns:      {FP_PATTERNS_FILE}  ({len(_fp_patterns)} loaded)")
     print(f"  Dashboard build:  {'dist/ (Vite build)' if dist_ok else 'legacy index.html'}")
     print(f"  AI analyst:       "
           f"{'enabled' if CFG['ai_analyst'].get('enabled') and os.environ.get('ANTHROPIC_API_KEY') else 'fallback only'}")

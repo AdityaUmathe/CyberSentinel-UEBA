@@ -12,13 +12,14 @@ import { showToast } from "./ui/toast.js";
 const feedURL = () => "/api/feed" + (state.showFps ? "?include_fp=1" : "");
 
 export async function fetchAll() {
-  const [stats, feed, users, camps, agents, fps] = await Promise.all([
+  const [stats, feed, users, camps, agents, fps, fpPatterns] = await Promise.all([
     fetch("/api/stats").then((r) => r.json()),
     fetch(feedURL()).then((r) => r.json()),
     fetch("/api/users").then((r) => r.json()),
     fetch("/api/campaigns").then((r) => r.json()),
     fetch("/api/agents").then((r) => r.json()),
     fetch("/api/false-positives").then((r) => r.json()),
+    fetch("/api/false-positive-patterns").then((r) => r.json()).catch(() => []),
   ]);
   state.feedData       = feed;
   state.usersData      = users;
@@ -28,6 +29,7 @@ export async function fetchAll() {
   state.allUsersData   = users;
   state.allAgentsData  = agents;
   state.falsePositives = fps;
+  state.fpPatterns     = Array.isArray(fpPatterns) ? fpPatterns : [];
 
   renderStats(stats);
   updateTicker(feed);
@@ -189,6 +191,58 @@ export async function unmarkFP(eventId) {
   } catch (e) {
     showToast("Failed to unmark FP: " + e.message, "error");
     fetchAll().catch(() => {});
+  }
+}
+
+// Pattern-FP mutators — these don't take an event_id, they store a fingerprint
+// {signature_id, user, agent} that auto-suppresses ALL future alerts matching it.
+// Server filter applies on every load_alerts(), so the next fetchAll() reflects
+// the new pattern without needing an engine restart.
+export async function markPatternFP({ signature_id, user, agent, reason = "" }) {
+  if (!signature_id) {
+    showToast("Cannot mark pattern: missing signature_id", "error");
+    return;
+  }
+  try {
+    const r = await fetch("/api/false-positive-pattern", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ signature_id, user, agent, reason }),
+    });
+    const data = await r.json();
+    if (!r.ok || data.ok === false) {
+      throw new Error((data && data.error) || `HTTP ${r.status}`);
+    }
+    if (data.deduped) {
+      showToast("Pattern already exists — nothing to do", "info");
+    } else {
+      const u = user === "*" ? "any user" : user;
+      const h = agent === "*" ? "any host" : agent;
+      showToast(`Pattern saved — rule ${signature_id} / ${u} / ${h}`, "success");
+    }
+    // Server-side filter applies on next fetch — reload everything so the
+    // matching alerts disappear from every panel and the FP page picks up
+    // the new pattern row.
+    fetchAll().catch(() => {});
+  } catch (e) {
+    showToast("Failed to mark pattern: " + e.message, "error");
+  }
+}
+
+export async function unmarkPatternFP(patternId) {
+  if (!patternId) return;
+  try {
+    const r = await fetch("/api/false-positive-pattern/" + encodeURIComponent(patternId), {
+      method: "DELETE",
+    });
+    const data = await r.json();
+    if (!r.ok || data.ok === false) {
+      throw new Error((data && data.error) || `HTTP ${r.status}`);
+    }
+    showToast("Pattern removed", "success");
+    fetchAll().catch(() => {});
+  } catch (e) {
+    showToast("Failed to remove pattern: " + e.message, "error");
   }
 }
 

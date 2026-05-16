@@ -541,6 +541,37 @@
 
   <!-- FALSE POSITIVES -->
   <div class="page" id="page-false-positives">
+
+    <!-- Pattern FPs — fingerprint-based auto-suppression rules -->
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-header-left">
+          <span class="panel-title">⌁ Auto-Suppression Patterns</span>
+          <span class="info-btn" title="">i
+            <div class="info-tooltip">
+              <div class="info-tooltip-title">FP Patterns</div>
+              <div class="info-tooltip-row"><span class="info-tooltip-key">Match</span><span class="info-tooltip-val tv-cyan">signature_id + user + agent</span></div>
+              <div class="info-tooltip-row"><span class="info-tooltip-key">Storage</span><span class="info-tooltip-val tv-cyan">fp_patterns.json</span></div>
+              <div class="info-tooltip-note">Patterns auto-suppress every alert (past and future) whose fingerprint matches. Wildcards * broaden scope. Remove a pattern to bring matching alerts back.</div>
+            </div>
+          </span>
+        </div>
+        <span class="panel-badge" id="fp-pat-badge">0</span>
+      </div>
+      <div class="feed-table-wrap">
+        <table id="fp-pat-table">
+          <thead>
+            <tr>
+              <th>Rule</th><th>User</th><th>Host</th><th>Reason</th>
+              <th>Matched</th><th>Created</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="fp-pat-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Per-event FPs — alerts marked individually -->
     <div class="panel">
       <div class="panel-header">
         <div class="panel-header-left">

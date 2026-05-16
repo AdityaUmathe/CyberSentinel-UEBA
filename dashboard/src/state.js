@@ -23,6 +23,9 @@ export const state = {
   // False positives — list of {event_id, reason, marked_at, alert:{...}}
   // populated from GET /api/false-positives.
   falsePositives: [],
+  // Pattern FPs — list of {id, signature_id, user, agent, reason, marked_at, matched}
+  // populated from GET /api/false-positive-patterns.
+  fpPatterns: [],
   // When true, the Alert Feed sends include_fp=1 and renders FP-tagged rows
   // inline with strikethrough styling.
   showFps: false,
