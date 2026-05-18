@@ -1,7 +1,7 @@
 // False Positives tab — lists every FP-marked alert with the original alert
 // data merged in, plus an "Unmark" button to restore each one to the feed.
-// Also renders the pattern-FP table (signature_id + user + agent fingerprints
-// that auto-suppress future matching alerts).
+// Also renders the pattern-FP table — one row per rule description that
+// auto-suppresses every future alert with the same description.
 
 import { state } from "../state.js";
 import { fmtTime, fmtDate, scoreColor, verdictClass, verdictLabel } from "../helpers.js";
@@ -20,10 +20,10 @@ function renderFpPatterns() {
   if (badge) badge.textContent = pats.length;
 
   if (!pats.length) {
-    tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state" style="padding:20px 12px">
+    tbody.innerHTML = `<tr><td colspan="5"><div class="empty-state" style="padding:20px 12px">
       <p>NO AUTO-SUPPRESSION PATTERNS</p>
       <p style="font-family:var(--mono2);font-size:10px;color:var(--text3);margin-top:8px;letter-spacing:0.6px">
-        Expand any alert and click <b>Save pattern</b> to fingerprint similar alerts and suppress them automatically.
+        Click <b>Mark FP</b> on any alert to auto-suppress every future alert with the same rule description.
       </p>
     </div></td></tr>`;
     return;
@@ -31,12 +31,9 @@ function renderFpPatterns() {
 
   tbody.innerHTML = pats.map((p) => {
     const idSafe = (p.id || "").replace(/'/g, "\\'");
-    const userDisp  = (p.user  === "*" || !p.user)  ? '<span class="fp-pat-wild">any</span>' : escapeHtml(p.user);
-    const agentDisp = (p.agent === "*" || !p.agent) ? '<span class="fp-pat-wild">any</span>' : escapeHtml(p.agent);
+    const desc = p.rule_description || "—";
     return `<tr class="fp-row-record">
-      <td><code class="fp-pat-rule">${escapeHtml(p.signature_id)}</code></td>
-      <td class="user-cell">${userDisp}</td>
-      <td>${agentDisp}</td>
+      <td class="sig-cell"><span class="fp-pat-desc">${escapeHtml(desc)}</span></td>
       <td class="fp-reason-cell">${p.reason ? `<span class="fp-reason-text">${escapeHtml(p.reason)}</span>` : '<span class="fp-reason-empty">—</span>'}</td>
       <td><span class="fp-pat-matched">${(p.matched || 0).toLocaleString()}</span></td>
       <td class="time-cell">${fmtDate(p.marked_at)}</td>

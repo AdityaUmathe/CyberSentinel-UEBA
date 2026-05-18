@@ -141,11 +141,28 @@ _fp_lock = __import__("threading").Lock()
 _fp_dict: dict = {}
 
 # ── False-positive pattern store ─────────────────────────────────────────────
-# Each pattern is a fingerprint that auto-suppresses any future alert matching
-# (signature_id, user, agent). User and agent each default to "*" (wildcard).
-# Persisted to FP_PATTERNS_FILE atomically.
+# Each pattern auto-suppresses any future alert whose rule description
+# (security.signature) matches `rule_description`. Comparison is whitespace-
+# trimmed and case-insensitive so analysts don't have to worry about minor
+# string normalisation differences between the SIEM source and the alert
+# stream. Persisted to FP_PATTERNS_FILE atomically.
 _fp_pat_lock = __import__("threading").Lock()
-_fp_patterns: list = []  # list of dicts: {id, signature_id, user, agent, reason, marked_at}
+_fp_patterns: list = []  # list of dicts: {id, rule_description, reason, marked_at}
+
+
+def _norm_desc(s) -> str:
+    """Normalise a rule description for matching: trim + lowercase."""
+    return (str(s or "")).strip().lower()
+
+
+def _parse_iso(ts) -> datetime | None:
+    """Parse an ISO-8601 timestamp; return None if missing/unparseable."""
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except Exception:
+        return None
 
 # ── Agent sync state (populated by the background poller) ────────────────────
 _agent_sync_last_at: str = ""           # ISO timestamp of last successful poll
@@ -383,7 +400,13 @@ def save_fps() -> None:
 
 
 def load_fp_patterns() -> None:
-    """Load FP patterns from disk into _fp_patterns."""
+    """Load FP patterns from disk into _fp_patterns.
+
+    Accepts both the new shape (`rule_description`) and the legacy shape
+    (`signature_id` + optional `user`/`agent`). Legacy entries are dropped
+    with a warning since they can't be migrated without alert context — the
+    analyst will need to re-mark a representative alert FP to recreate them.
+    """
     global _fp_patterns
     if not FP_PATTERNS_FILE.exists():
         _fp_patterns = []
@@ -391,7 +414,15 @@ def load_fp_patterns() -> None:
     try:
         data = json.loads(FP_PATTERNS_FILE.read_text(encoding="utf-8") or "[]")
         if isinstance(data, list):
-            _fp_patterns = [p for p in data if isinstance(p, dict) and p.get("signature_id")]
+            kept, dropped = [], 0
+            for p in data:
+                if isinstance(p, dict) and (p.get("rule_description") or "").strip():
+                    kept.append(p)
+                elif isinstance(p, dict) and p.get("signature_id"):
+                    dropped += 1
+            _fp_patterns = kept
+            if dropped:
+                print(f"[dashboard] dropped {dropped} legacy sig-based FP pattern(s) — re-mark to recreate")
         else:
             _fp_patterns = []
     except Exception as e:
@@ -411,20 +442,22 @@ def save_fp_patterns() -> None:
 
 
 def _alert_matches_pattern(alert: dict, pattern: dict) -> bool:
-    """Return True iff alert matches the (signature_id, user, agent) fingerprint.
-    A pattern field equal to "*" is treated as a wildcard.
+    """Return True iff alert's rule description matches the pattern's
+    rule_description (trim + case-insensitive) AND the alert arrived after
+    the pattern was created. The time guard keeps historical alerts visible
+    — patterns only suppress NEW alerts going forward.
     """
     sec = alert.get("security", {}) or {}
-    if str(sec.get("signature_id") or "") != str(pattern.get("signature_id") or ""):
+    if _norm_desc(sec.get("signature")) != _norm_desc(pattern.get("rule_description")):
         return False
-    p_user = pattern.get("user") or "*"
-    if p_user != "*" and get_user(alert) != p_user:
+    # Time guard: pattern.marked_at must exist; alert.event_time must be
+    # strictly later. If either timestamp is missing or unparseable, treat as
+    # "not a match" so existing history isn't accidentally hidden.
+    p_at = _parse_iso(pattern.get("marked_at"))
+    a_at = _parse_iso(alert.get("event_time"))
+    if p_at is None or a_at is None:
         return False
-    p_agent = pattern.get("agent") or "*"
-    host_name = (alert.get("host", {}) or {}).get("name") or ""
-    if p_agent != "*" and host_name != p_agent:
-        return False
-    return True
+    return a_at > p_at
 
 
 def _matching_pattern(alert: dict):
@@ -438,44 +471,38 @@ def _matching_pattern(alert: dict):
 
 
 def _pattern_from_alert(alert: dict, reason: str) -> dict | None:
-    """Build an FP pattern record from an alert's fingerprint.
+    """Build an FP pattern record from an alert's rule description.
 
-    Default scope is `signature_id + user` (host wildcarded). This matches the
-    traditional SIEM expectation that marking "this rule for this user is
-    noise" applies wherever that user appears, not only on the specific host
-    that fired this instance. For host-attributed events with no user info,
-    `get_user()` already falls back to `host.name`, so the fingerprint
-    naturally becomes `signature_id + host` instead.
+    The pattern suppresses every future alert whose rule description (the
+    human-readable rule name, `security.signature`) matches — regardless of
+    user, host, or even signature_id. This is the broad "this kind of activity
+    is benign here" semantic.
 
-    Returns None if signature_id is missing.
+    Returns None if the alert has no rule description.
     """
     sec = alert.get("security", {}) or {}
-    sig = str(sec.get("signature_id") or "").strip()
-    if not sig:
+    desc = (str(sec.get("signature") or "")).strip()
+    if not desc:
         return None
-    user = (get_user(alert) or "").strip() or "*"
     return {
-        "id":           "fpp-" + uuid.uuid4().hex[:10],
-        "signature_id": sig,
-        "user":         user,
-        "agent":        "*",
-        "reason":       reason or "auto-suppress from analyst FP mark",
-        "marked_at":    datetime.now(timezone.utc).isoformat(),
+        "id":               "fpp-" + uuid.uuid4().hex[:10],
+        "rule_description": desc,
+        "reason":           reason or "auto-suppress from analyst FP mark",
+        "marked_at":        datetime.now(timezone.utc).isoformat(),
     }
 
 
 def _add_pattern_if_new(candidate: dict | None):
-    """Append candidate to _fp_patterns unless an identical fingerprint exists.
-    Returns (record, was_new). If candidate is None or has no signature_id,
-    returns (None, False).
+    """Append candidate to _fp_patterns unless an identical rule_description
+    already exists. Returns (record, was_new). If candidate is None or has no
+    rule_description, returns (None, False).
     """
-    if not candidate or not candidate.get("signature_id"):
+    if not candidate or not (candidate.get("rule_description") or "").strip():
         return None, False
+    cand_norm = _norm_desc(candidate["rule_description"])
     with _fp_pat_lock:
         for p in _fp_patterns:
-            if (str(p.get("signature_id")) == str(candidate["signature_id"]) and
-                (p.get("user") or "*") == candidate["user"] and
-                (p.get("agent") or "*") == candidate["agent"]):
+            if _norm_desc(p.get("rule_description")) == cand_norm:
                 return p, False
         _fp_patterns.append(candidate)
         save_fp_patterns()
@@ -976,8 +1003,8 @@ def _event_ids_in_campaign(campaign_id: str) -> list[str]:
 @app.route("/api/false-positive/campaign/<path:campaign_id>", methods=["POST"])
 def mark_campaign_false_positive(campaign_id):
     """Mark every alert in a campaign as FP. Also auto-creates one pattern per
-    unique (signature_id, user, agent) fingerprint within the campaign so the
-    suppression follows similar alerts forward in time."""
+    unique rule description within the campaign so the suppression follows
+    similar alerts forward in time."""
     body = request.get_json(silent=True) or {}
     reason = (body.get("reason") or "").strip() \
              or f"campaign {campaign_id} marked as false positive"
@@ -1002,7 +1029,7 @@ def mark_campaign_false_positive(campaign_id):
         candidate = _pattern_from_alert(a, reason)
         if not candidate:
             continue
-        key = (candidate["signature_id"], candidate["user"], candidate["agent"])
+        key = _norm_desc(candidate["rule_description"])
         if key in seen:
             continue
         seen.add(key)
@@ -1031,8 +1058,8 @@ def unmark_campaign_false_positive(campaign_id):
 
 
 # ── False-positive PATTERN management ────────────────────────────────────────
-# Patterns auto-suppress any future alert whose (signature_id, user, agent)
-# fingerprint matches. Wildcard "*" on user or agent broadens the scope.
+# Patterns auto-suppress any future alert whose rule description matches
+# (whitespace-trimmed, case-insensitive). One pattern = one rule description.
 @app.route("/api/false-positive-patterns")
 def list_fp_patterns():
     """Return all FP patterns with a `matched` count over the loaded alerts."""
@@ -1051,23 +1078,17 @@ def list_fp_patterns():
 
 @app.route("/api/false-positive-pattern", methods=["POST"])
 def mark_fp_pattern():
-    """Add a new FP pattern directly (used by the FP review page's "add
-    custom pattern" affordance, if any). Body: {signature_id, user, agent,
-    reason}. user/agent default to "*" (wildcard) if omitted or empty."""
+    """Add a new FP pattern directly. Body: {rule_description, reason}."""
     body = request.get_json(silent=True) or {}
-    sig = str(body.get("signature_id") or "").strip()
-    user = (body.get("user") or "*").strip() or "*"
-    agent = (body.get("agent") or "*").strip() or "*"
+    desc = (str(body.get("rule_description") or "")).strip()
     reason = (body.get("reason") or "").strip()
-    if not sig:
-        return jsonify({"ok": False, "error": "signature_id required"}), 400
+    if not desc:
+        return jsonify({"ok": False, "error": "rule_description required"}), 400
     candidate = {
-        "id":           "fpp-" + uuid.uuid4().hex[:10],
-        "signature_id": sig,
-        "user":         user,
-        "agent":        agent,
-        "reason":       reason,
-        "marked_at":    datetime.now(timezone.utc).isoformat(),
+        "id":               "fpp-" + uuid.uuid4().hex[:10],
+        "rule_description": desc,
+        "reason":           reason,
+        "marked_at":        datetime.now(timezone.utc).isoformat(),
     }
     rec, was_new = _add_pattern_if_new(candidate)
     return jsonify({"ok": True, "record": rec, "deduped": (not was_new)})

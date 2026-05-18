@@ -550,9 +550,9 @@
           <span class="info-btn" title="">i
             <div class="info-tooltip">
               <div class="info-tooltip-title">FP Patterns</div>
-              <div class="info-tooltip-row"><span class="info-tooltip-key">Match</span><span class="info-tooltip-val tv-cyan">signature_id + user + agent</span></div>
+              <div class="info-tooltip-row"><span class="info-tooltip-key">Match</span><span class="info-tooltip-val tv-cyan">rule description (case-insensitive)</span></div>
               <div class="info-tooltip-row"><span class="info-tooltip-key">Storage</span><span class="info-tooltip-val tv-cyan">fp_patterns.json</span></div>
-              <div class="info-tooltip-note">Patterns auto-suppress every alert (past and future) whose fingerprint matches. Wildcards * broaden scope. Remove a pattern to bring matching alerts back.</div>
+              <div class="info-tooltip-note">Patterns auto-suppress only NEW alerts (received after the pattern was created) whose rule description matches — regardless of user or host. Past alerts stay visible. Remove a pattern to stop suppressing future ones.</div>
             </div>
           </span>
         </div>
@@ -562,7 +562,7 @@
         <table id="fp-pat-table">
           <thead>
             <tr>
-              <th>Rule</th><th>User</th><th>Host</th><th>Reason</th>
+              <th>Rule Description</th><th>Reason</th>
               <th>Matched</th><th>Created</th><th></th>
             </tr>
           </thead>

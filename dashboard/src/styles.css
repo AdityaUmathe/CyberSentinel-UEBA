@@ -2286,6 +2286,15 @@
     color: var(--yellow);
     font-weight: 600;
   }
+  /* Rule description column in the pattern table — full text, no truncation. */
+  #fp-pat-table td.sig-cell { max-width: none; white-space: normal; }
+  .fp-pat-desc {
+    font-family: var(--mono2);
+    font-size: 12px;
+    color: var(--text1);
+    font-weight: 500;
+    line-height: 1.4;
+  }
 
   /* "Show FPs" inline toggle in the feed filter bar */
   .fp-toggle {

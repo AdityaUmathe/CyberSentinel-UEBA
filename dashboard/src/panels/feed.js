@@ -12,7 +12,7 @@ function evRow(label, value, highlight) {
   }">${val}</span></div>`;
 }
 
-export function buildEvidencePanel(ev, alertId, colSpan, eventId, signatureId, alertUser, alertHost) {
+export function buildEvidencePanel(ev, alertId, colSpan, eventId, signatureDesc) {
   colSpan = colSpan || 9;
   // Persist expanded/collapsed state across re-renders.
   const expanded = state.expandedRows.has(alertId);
@@ -31,19 +31,16 @@ export function buildEvidencePanel(ev, alertId, colSpan, eventId, signatureId, a
   const eidSafe = (eventId || "").replace(/'/g, "\\'").replace(/\\/g, "\\\\");
   // `evStyle` is set above based on state.expandedRows so an expanded panel
   // stays visible after a full re-render.
-  // Build the inferred fingerprint that the server will auto-create as a
-  // suppression pattern when this alert is marked FP. Shown to the analyst
-  // upfront so the "blast radius" is obvious before they click.
-  const sigForFp  = signatureId || sig.rule_id || "";
-  const userForFp = (alertUser || "").trim() || "*";
-  const hostForFp = (alertHost || "").trim() || "*";
+  // Tell the analyst the "blast radius" of marking this alert: the server
+  // will create a pattern keyed on the rule description, suppressing every
+  // future alert that fires the same rule — regardless of user or host.
+  const descForFp = (signatureDesc || sig.description || "").trim();
   const escFp = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const fpHint = (eventId && sigForFp) ? `
+  const fpHint = (eventId && descForFp) ? `
       <div class="fp-form-hint">
-        Marking this alert as FP will <b>also auto-suppress</b> future alerts where
-        rule is <span class="fp-pat-chip"><b>${escFp(sigForFp)}</b></span>
-        <b>AND</b> user is <span class="fp-pat-chip"><b>${escFp(userForFp)}</b></span>
-        (host doesn't matter). Other rules from this user are unaffected. Manage in the False Positives tab.
+        Marking this alert as FP will <b>auto-suppress only future</b> alerts whose
+        rule description matches <span class="fp-pat-chip"><b>${escFp(descForFp)}</b></span>
+        — across all users and hosts. Existing history stays visible; other rule descriptions are unaffected. Manage in the False Positives tab.
       </div>` : "";
   const fpForm = eventId ? `
     <div class="fp-form" onclick="event.stopPropagation()">
@@ -173,7 +170,7 @@ export function feedRows(alerts, colSpan, idPrefix) {
         <td>${a.campaign_id ? `<span class="camp-tag">${a.campaign_id}</span>` : "—"}</td>
         <td class="sig-cell"><div class="sig-cell-inner"><span class="sig-text">${a.signature || "—"}</span>${fpBtn}</div></td>
       </tr>`);
-    rows.push(buildEvidencePanel(a.evidence, alertId, colSpan, a.event_id, a.signature_id, a.user, a.host));
+    rows.push(buildEvidencePanel(a.evidence, alertId, colSpan, a.event_id, a.signature));
   });
   return rows.join("");
 }

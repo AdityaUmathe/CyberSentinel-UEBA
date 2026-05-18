@@ -171,10 +171,8 @@ export async function markFP(eventId, reason = "") {
     }
     if (data.pattern) {
       const p = data.pattern;
-      const u = p.user === "*" ? "any user" : p.user;
-      const h = p.agent === "*" ? "any host" : p.agent;
-      const verb = data.pattern_new ? "Auto-suppressing" : "Already auto-suppressing";
-      showToast(`${verb} rule ${p.signature_id} / ${u} / ${h}`, "success");
+      const verb = data.pattern_new ? "Auto-suppressing new" : "Already auto-suppressing new";
+      showToast(`${verb} alerts with rule "${p.rule_description}"`, "success");
     }
     // Don't await — background reconciliation of stats/users/agents/campaigns
     // and refresh of the pattern list.
@@ -205,20 +203,19 @@ export async function unmarkFP(eventId) {
   }
 }
 
-// Pattern-FP mutators — these don't take an event_id, they store a fingerprint
-// {signature_id, user, agent} that auto-suppresses ALL future alerts matching it.
-// Server filter applies on every load_alerts(), so the next fetchAll() reflects
-// the new pattern without needing an engine restart.
-export async function markPatternFP({ signature_id, user, agent, reason = "" }) {
-  if (!signature_id) {
-    showToast("Cannot mark pattern: missing signature_id", "error");
+// Pattern-FP mutators — patterns auto-suppress ALL future alerts whose rule
+// description matches. Server filter applies on every load_alerts(), so the
+// next fetchAll() reflects the new pattern without needing an engine restart.
+export async function markPatternFP({ rule_description, reason = "" }) {
+  if (!rule_description) {
+    showToast("Cannot mark pattern: missing rule description", "error");
     return;
   }
   try {
     const r = await fetch("/api/false-positive-pattern", {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ signature_id, user, agent, reason }),
+      body:    JSON.stringify({ rule_description, reason }),
     });
     const data = await r.json();
     if (!r.ok || data.ok === false) {
@@ -227,13 +224,8 @@ export async function markPatternFP({ signature_id, user, agent, reason = "" }) 
     if (data.deduped) {
       showToast("Pattern already exists — nothing to do", "info");
     } else {
-      const u = user === "*" ? "any user" : user;
-      const h = agent === "*" ? "any host" : agent;
-      showToast(`Pattern saved — rule ${signature_id} / ${u} / ${h}`, "success");
+      showToast(`Pattern saved — new alerts with rule "${rule_description}" will be auto-suppressed`, "success");
     }
-    // Server-side filter applies on next fetch — reload everything so the
-    // matching alerts disappear from every panel and the FP page picks up
-    // the new pattern row.
     fetchAll().catch(() => {});
   } catch (e) {
     showToast("Failed to mark pattern: " + e.message, "error");
