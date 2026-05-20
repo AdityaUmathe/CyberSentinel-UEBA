@@ -282,7 +282,7 @@ def build_evidence_block(
     fusion: dict,
     anomaly_reasons: list[str],
     profile: dict | None,
-    alerts_today: int,
+    alerts_today: int | None,
 ) -> dict:
     """
     Build a human-readable evidence block for SOC analysts.
@@ -458,8 +458,12 @@ class UEBAEngine:
             "start_time":      time.time(),
         }
 
-        # Per-user alert count today (for evidence historical context)
+        # Per-user alert count today (for evidence historical context).
+        # Cleared at local-wall-clock midnight by _maybe_reset_alerts_today.
+        # Only attributed users get counted — alerts with user None/"unknown"
+        # are excluded so the bucket doesn't blow up from unattributed events.
         self._user_alerts_today: dict[str, int] = {}
+        self._alerts_today_date = None  # date the counter currently covers
 
         log.info("Initializing UEBA engine...")
         self._load_components()
@@ -516,6 +520,23 @@ class UEBAEngine:
         self.extractor     = FeatureExtractor(cfg, self.profile_store)
 
         log.info("All components loaded successfully")
+
+    def _maybe_reset_alerts_today(self) -> None:
+        """
+        Clear the per-user "alerts today" counter when the local date rolls
+        over. Without this, the counter accumulates for the full lifetime of
+        the engine process — which is days, not hours — and the field is
+        misleading. Called once per anomalous event.
+        """
+        today = datetime.now().date()
+        if self._alerts_today_date != today:
+            if self._alerts_today_date is not None:
+                log.info(
+                    "Day rolled over (%s → %s); clearing alerts_today counter",
+                    self._alerts_today_date, today,
+                )
+            self._user_alerts_today.clear()
+            self._alerts_today_date = today
 
     def _process_log(self, log_entry: dict) -> dict | None:
         """
@@ -583,8 +604,14 @@ class UEBAEngine:
             self.config,
         )
 
-        # Track per-user alert count today for evidence
-        self._user_alerts_today[user] = self._user_alerts_today.get(user, 0) + 1
+        # Track per-user alert count today for evidence. Skip unattributed
+        # events (user None / "unknown") so they don't all pile into one bucket
+        # and inflate the count by orders of magnitude.
+        self._maybe_reset_alerts_today()
+        alerts_today_for_user: int | None = None
+        if user and user != "unknown":
+            self._user_alerts_today[user] = self._user_alerts_today.get(user, 0) + 1
+            alerts_today_for_user = self._user_alerts_today[user]
 
         # Fetch user profile for evidence baseline comparison
         try:
@@ -596,7 +623,7 @@ class UEBAEngine:
         evidence_block = build_evidence_block(
             log_entry, if_result, ae_result, fusion,
             anomaly_reasons, profile,
-            alerts_today=self._user_alerts_today[user],
+            alerts_today=alerts_today_for_user,
         )
 
         # Append ueba block + evidence to original log
