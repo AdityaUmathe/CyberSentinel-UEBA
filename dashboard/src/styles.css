@@ -736,7 +736,7 @@
     gap: 12px;
   }
   .ticker-live-label {
-    color: var(--red);
+    color: var(--green);
     font-weight: 600;
     letter-spacing: 1px;
     animation: blink 1.4s step-start infinite;
