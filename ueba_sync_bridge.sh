@@ -19,7 +19,7 @@ SSH_OPTS="-p ${SOC_PORT} -i /root/.ssh/id_ueba -o StrictHostKeyChecking=no -o Co
 
 mkdir -p "$(dirname "$STATE_FILE")" "$(dirname "$LOG")"
 
-log() { echo "$(date '+%Y-%m-%d %H:%M:%S')  $*" | tee -a "$LOG"; }
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S')  $*" >> "$LOG"; }
 
 get_last_processed() { [ -f "$STATE_FILE" ] && cat "$STATE_FILE" || echo ""; }
 set_last_processed() { echo "$1" > "$STATE_FILE"; }
@@ -52,12 +52,15 @@ push_loop &
 PUSH_PID=$!
 
 # ── STATS loop
+# Note: TAIL_PID is set by the main loop *after* this subshell forks, so the
+# inherited copy stays empty. Query pgrep each tick to report the real PID.
 stats_loop() {
     while true; do
         sleep 60
         sz=$(wc -c < "$LOCAL_ENRICHED" 2>/dev/null || echo 0)
         sz=$(( sz / 1048576 ))
-        log "Stats | enriched.jsonl: ${sz} MB | tail PID: ${TAIL_PID:-none}"
+        tail_pid=$(pgrep -f "ssh .* tail -f ${SOC_ENRICHED_DIR}" | head -1)
+        log "Stats | enriched.jsonl: ${sz} MB | tail PID: ${tail_pid:-none}"
     done
 }
 stats_loop &
