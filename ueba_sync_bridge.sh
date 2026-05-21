@@ -57,10 +57,10 @@ PUSH_PID=$!
 stats_loop() {
     while true; do
         sleep 60
-        sz=$(wc -c < "$LOCAL_ENRICHED" 2>/dev/null || echo 0)
-        sz=$(( sz / 1048576 ))
-        tail_pid=$(pgrep -f "ssh .* tail -f ${SOC_ENRICHED_DIR}" | head -1)
-        log "Stats | enriched.jsonl: ${sz} MB | tail PID: ${tail_pid:-none}"
+        sz_bytes=$(wc -c < "$LOCAL_ENRICHED" 2>/dev/null || echo 0)
+        sz_human=$(numfmt --to=iec --suffix=B "$sz_bytes" 2>/dev/null || echo "${sz_bytes}B")
+        tail_pid=$(pgrep -f "ssh .* tail -n 0 -f ${SOC_ENRICHED_DIR}" | head -1)
+        log "Stats | enriched.jsonl: ${sz_human} | tail PID: ${tail_pid:-none}"
     done
 }
 stats_loop &
@@ -101,7 +101,9 @@ while true; do
         log "PULL: tailing active file ${ACTIVE_FNAME}..."
         [ -n "$TAIL_PID" ] && kill "$TAIL_PID" 2>/dev/null || true
 
-        ssh ${SSH_OPTS} ${SOC_HOST} "tail -f ${ACTIVE_FILE}" >> "$LOCAL_ENRICHED" &
+        # -n 0: stream from EOF only; otherwise tail re-emits the last 10 lines
+        # of the file on every bridge restart, which the engine then re-processes.
+        ssh ${SSH_OPTS} ${SOC_HOST} "tail -n 0 -f ${ACTIVE_FILE}" >> "$LOCAL_ENRICHED" &
         TAIL_PID=$!
         log "  Tail PID: ${TAIL_PID}"
 
