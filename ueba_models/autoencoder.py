@@ -71,7 +71,7 @@ class AutoencoderScorer:
     - Models are loaded lazily (only when that user is seen)
     - LRU cache keeps max_loaded_models in RAM
     - Falls back to global model when user model doesn't exist
-    - Runs on CPU at inference (GPU overkill for 1 vector at a time)
+    - Uses GPU (CUDA) for inference when available
     """
 
     def __init__(self, autoencoder_dir: str, scaler,
@@ -82,8 +82,18 @@ class AutoencoderScorer:
         self.arch_cfg   = self.ae_config["architecture"]
         self.max_cached = config["streaming"]["max_loaded_user_models"]
 
-        # Always use CPU for inference (GPU is for training batch ops)
-        self.device = torch.device("cpu")
+        # `inference_device` overrides `device` for streaming inference only,
+        # so the trainer keeps using GPU while the engine can run on CPU.
+        # Tiny per-user AEs (~3K params) are memory-bound on GPU and pinning
+        # them there starves co-tenant GPU workloads (ollama, etc.).
+        dev_name = self.ae_config.get("inference_device") \
+                   or self.ae_config.get("device", "cuda")
+        if dev_name == "cuda" and torch.cuda.is_available():
+            self.device = torch.device("cuda")
+            log.info("Autoencoder inference on GPU: %s", torch.cuda.get_device_name(0))
+        else:
+            self.device = torch.device("cpu")
+            log.info("Autoencoder inference on CPU")
 
         # Load anomaly thresholds for each user model
         if not Path(thresholds_path).exists():

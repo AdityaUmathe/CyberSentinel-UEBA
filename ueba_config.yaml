@@ -140,7 +140,7 @@ autoencoder:
 
   training:
     epochs:           30
-    batch_size:       512
+    batch_size:       4096
     learning_rate:    0.001
     weight_decay:     0.0001
     val_split:        0.2
@@ -149,7 +149,8 @@ autoencoder:
     scheduler_gamma:  0.5
 
   threshold_percentile: 95
-  device: "cuda"
+  device: "cuda"            # trainer device — full retrain on GPU
+  inference_device: "cpu"   # streaming engine — CPU AE inference frees GPU SMs for FAISS + co-tenants
   num_workers: 4
 
 

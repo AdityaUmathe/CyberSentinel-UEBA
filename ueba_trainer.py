@@ -209,26 +209,17 @@ class AutoencoderTrainer:
         # No re-reading from HDF5, no index masking, instant
         n = len(dataset)
         val_size   = int(n * train_cfg["val_split"])
+        # Need at least 1 train sample AND 1 val sample; otherwise either the
+        # train loop or the val loop divides by zero. Force val_size>=1 when
+        # there is enough data, else skip validation entirely.
+        if n >= 2 and val_size == 0:
+            val_size = 1
         train_size = n - val_size
 
         perm       = torch.randperm(n)
-        train_data = dataset.data[perm[:train_size]]
-        val_data   = dataset.data[perm[train_size:]]
-
-        train_loader = DataLoader(
-            torch.utils.data.TensorDataset(train_data),
-            batch_size=train_cfg["batch_size"],
-            shuffle=True,
-            num_workers=0,
-            pin_memory=False,
-        )
-        val_loader = DataLoader(
-            torch.utils.data.TensorDataset(val_data),
-            batch_size=train_cfg["batch_size"],
-            shuffle=False,
-            num_workers=0,
-            pin_memory=False,
-        )
+        train_data = dataset.data[perm[:train_size]].to(self.device)
+        val_data   = dataset.data[perm[train_size:]].to(self.device)
+        bs = train_cfg["batch_size"]
 
         # Model
         model = Autoencoder(
@@ -249,7 +240,7 @@ class AutoencoderTrainer:
         )
         criterion = nn.MSELoss()
 
-        # Training loop
+        # Training loop — data lives on GPU, no CPU→GPU transfer per batch
         best_val_loss = float("inf")
         patience_counter = 0
         best_state = None
@@ -258,28 +249,36 @@ class AutoencoderTrainer:
                  model_name, train_size, self.device)
 
         for epoch in range(1, train_cfg["epochs"] + 1):
-            # Train
+            # Shuffle training indices on GPU
+            idx = torch.randperm(train_size, device=self.device)
+
+            # Train — accumulate loss on GPU to avoid per-batch CPU sync
             model.train()
-            train_loss = 0.0
-            for (batch,) in train_loader:
-                batch = batch.to(self.device)
+            gpu_train_loss = torch.tensor(0.0, device=self.device)
+            for i in range(0, train_size, bs):
+                batch = train_data[idx[i:i + bs]]
                 optimizer.zero_grad()
                 output = model(batch)
                 loss = criterion(output, batch)
                 loss.backward()
                 optimizer.step()
-                train_loss += loss.item() * len(batch)
-            train_loss /= train_size
+                gpu_train_loss += loss.detach() * len(batch)
+            train_loss = gpu_train_loss.item() / train_size
 
             # Validate
             model.eval()
-            val_loss = 0.0
-            with torch.no_grad():
-                for (batch,) in val_loader:
-                    batch = batch.to(self.device)
-                    output = model(batch)
-                    val_loss += criterion(output, batch).item() * len(batch)
-            val_loss /= val_size
+            if val_size > 0:
+                gpu_val_loss = torch.tensor(0.0, device=self.device)
+                with torch.no_grad():
+                    for i in range(0, val_size, bs):
+                        batch = val_data[i:i + bs]
+                        output = model(batch)
+                        gpu_val_loss += criterion(output, batch) * len(batch)
+                val_loss = gpu_val_loss.item() / val_size
+            else:
+                # Tiny dataset — no holdout possible; gate early-stopping on
+                # train_loss instead.
+                val_loss = train_loss
 
             scheduler.step()
 
@@ -315,43 +314,26 @@ class AutoencoderTrainer:
 
     def _compute_threshold_tensor(self, model: Autoencoder,
                                   data: torch.Tensor) -> float:
-        """Compute threshold directly from an in-memory tensor."""
+        """Compute threshold directly from a GPU tensor."""
         model.eval()
-        loader = DataLoader(
-            torch.utils.data.TensorDataset(data),
-            batch_size=2048, shuffle=False, num_workers=0
-        )
+        bs = 8192
+        if data.device.type != "cuda" and self.device.type == "cuda":
+            data = data.to(self.device)
         all_errors = []
         with torch.no_grad():
-            for (batch,) in loader:
-                batch = batch.to(self.device)
-                errors = model.reconstruction_error(batch)
-                all_errors.append(errors.cpu().numpy())
-        all_errors = np.concatenate(all_errors)
+            for i in range(0, len(data), bs):
+                errors = model.reconstruction_error(data[i:i + bs])
+                all_errors.append(errors)
+        all_errors = torch.cat(all_errors).cpu().numpy()
         percentile = self.config["threshold_percentile"]
         return float(np.percentile(all_errors, percentile))
 
     def _compute_threshold(self, model: Autoencoder,
                            dataset: HDF5Dataset) -> float:
-        """
-        Compute the reconstruction error threshold using in-memory tensor.
-        Events above this threshold at inference = behavioral anomaly.
-        """
+        """Compute threshold from dataset tensor on GPU."""
         model.eval()
-        loader = DataLoader(
-            torch.utils.data.TensorDataset(dataset.data),
-            batch_size=2048, shuffle=False, num_workers=0
-        )
-        all_errors = []
-        with torch.no_grad():
-            for (batch,) in loader:
-                batch = batch.to(self.device)
-                errors = model.reconstruction_error(batch)
-                all_errors.append(errors.cpu().numpy())
-
-        all_errors = np.concatenate(all_errors)
-        percentile = self.config["threshold_percentile"]
-        return float(np.percentile(all_errors, percentile))
+        data = dataset.data.to(self.device)
+        return self._compute_threshold_tensor(model, data)
 
 
 # ── Main Trainer ──────────────────────────────────────────────────────────────
@@ -546,6 +528,7 @@ class UEBATrainer:
         # Train per-user models
         eligible_set = {u for u, _ in eligible_users}
         trained = 0
+        skipped_sparse = 0
         for user, event_count in eligible_users:
             if user not in user_indices:
                 log.debug("User %s in profile store but not in features — skipping",
@@ -561,6 +544,15 @@ class UEBATrainer:
                 continue
 
             indices = np.array(user_indices[user])
+            # Profile DB has cumulative total_events, but the H5 window may
+            # contain far fewer rows for this user. Re-check against actual
+            # rows so we don't try to train on a handful of samples.
+            if len(indices) < min_events:
+                log.info("Skipping user '%s' — only %d rows in current H5 (< %d)",
+                         user, len(indices), min_events)
+                skipped_sparse += 1
+                continue
+
             log.info("Training autoencoder for user '%s' | events: %d",
                      user, len(indices))
 
@@ -582,7 +574,8 @@ class UEBATrainer:
             if self.device.type == "cuda":
                 torch.cuda.empty_cache()
 
-        log.info("Per-user autoencoders trained: %d", trained)
+        log.info("Per-user autoencoders trained: %d (skipped %d users with sparse data)",
+                 trained, skipped_sparse)
         self._save_thresholds()
 
     def _save_thresholds(self):
