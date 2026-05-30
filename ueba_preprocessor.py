@@ -144,6 +144,26 @@ _SUPPRESS_SOURCE_IPS = {
     "164.52.194.98",   # engine server — reverse tunnel + rsync traffic
 }
 
+
+def apply_noise_config(config: dict) -> int:
+    """Merge operator-managed suppression IDs from ueba_config.yaml
+    (`noise_suppression.signature_ids`) into the module-level
+    `_NOISE_SIGNATURE_IDS` set, so the YAML is authoritative without a code
+    edit. Idempotent — safe to call from every consumer's startup. Returns
+    the number of IDs newly added (those not already hard-coded above).
+
+    Without this, the YAML block is documentary only: `is_noise` checks the
+    hard-coded set, so IDs added to config never actually suppress anything.
+    """
+    cfg_ids = (config.get("noise_suppression", {}) or {}).get("signature_ids", []) or []
+    cfg_ids = {str(s).strip() for s in cfg_ids if str(s).strip()}
+    new_ids = cfg_ids - _NOISE_SIGNATURE_IDS
+    if new_ids:
+        _NOISE_SIGNATURE_IDS.update(new_ids)
+        log.info("Noise config merged: +%d signature_ids from config (%s)",
+                 len(new_ids), ", ".join(sorted(new_ids)))
+    return len(new_ids)
+
 # Known internal agents/hostnames that should never appear as alert subjects.
 _SUPPRESS_AGENT_NAMES = {
     "DESKTOP-QO9VL7M$",   # Windows machine account
@@ -334,6 +354,10 @@ class FeatureExtractor:
         self.config = config
         self.profile_store = profile_store  # optional, used for feature [34]
         self.null_fill = config["preprocessing"].get("null_fill_value", 0.0)
+        # Honor operator-managed suppression IDs from the YAML config. Runs
+        # here so every consumer (engine, trainer, batch preprocessor) that
+        # builds a FeatureExtractor picks them up — no per-call config plumbing.
+        apply_noise_config(config)
 
     def extract(self, log: dict) -> np.ndarray:
         """
