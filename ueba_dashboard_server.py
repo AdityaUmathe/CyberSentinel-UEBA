@@ -450,11 +450,13 @@ def _alert_matches_pattern(alert: dict, pattern: dict) -> bool:
     sec = alert.get("security", {}) or {}
     if _norm_desc(sec.get("signature")) != _norm_desc(pattern.get("rule_description")):
         return False
-    # Time guard: pattern.marked_at must exist; alert.event_time must be
-    # strictly later. If either timestamp is missing or unparseable, treat as
-    # "not a match" so existing history isn't accidentally hidden.
+    # Time guard: pattern.marked_at must exist; alert must have been *emitted
+    # by the engine* strictly later. Compare against ueba.processed_at (engine
+    # time) rather than event_time (source time) — a backlog replay can produce
+    # alerts whose event_time is days old but whose processed_at is "now".
     p_at = _parse_iso(pattern.get("marked_at"))
-    a_at = _parse_iso(alert.get("event_time"))
+    ueba = alert.get("ueba", {}) or {}
+    a_at = _parse_iso(ueba.get("processed_at") or alert.get("event_time"))
     if p_at is None or a_at is None:
         return False
     return a_at > p_at
@@ -683,7 +685,7 @@ def _alert_to_feed_item(a: dict) -> dict:
         "score":        ueba.get("combined_score"),
         "reasons":      ueba.get("anomaly_reasons", []),
         "campaign_id":  ueba.get("campaign_id"),
-        "signature":    sec.get("signature", "")[:80],
+        "signature":    (sec.get("signature") or "")[:80],
         "signature_id": sec.get("signature_id"),
         "severity":     sec.get("severity"),
         "host":         host.get("name"),

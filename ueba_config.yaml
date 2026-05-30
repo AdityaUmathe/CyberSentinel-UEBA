@@ -21,6 +21,10 @@ paths:
   log_file:             "logs/ueba_engine.log"
   trainer_log:          "logs/ueba_trainer.log"
   preprocessor_log:     "logs/ueba_preprocessor.log"
+  # Engine reads this file on each event (mtime-tracked, no restart needed).
+  # Written by the dashboard whenever an analyst marks an alert as FP.
+  # Must point at the same file the dashboard writes (`dashboard.false_positives_file`'s sibling).
+  fp_patterns_file:     "/root/NEW_DRIVE/aditya_ueba/fp_patterns.json"
 
 
 # ── Preprocessing ─────────────────────────────────────────────────────────────
@@ -270,6 +274,8 @@ noise_suppression:
     - "81620"    # Fortigate: Multiple high traffic events from same destination
     - "81621"    # Fortigate: Multiple high traffic events to same port
     - "60107"    # Failed attempt to perform a privileged operation (chrome.exe SocSRV_15)
+    - "61602"    # Windows Sysmon error event (DC noise — kernel/Sysmon channel hiccups)
+    - "61643"    # Multiple Sysmon error events (DC noise — meta-rule on 61602)
   suppress_zero_risk_network: true
   suppress_ipv6_multicast: true
   suppress_source_ips:

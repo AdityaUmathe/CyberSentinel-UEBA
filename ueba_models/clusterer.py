@@ -215,8 +215,18 @@ class RAGRetriever:
                         metadata_path)
             return
 
-        # Load index
-        self.index = faiss.read_index(index_path)
+        # Load index — use GPU if available
+        cpu_index = faiss.read_index(index_path)
+        if hasattr(faiss, "StandardGpuResources"):
+            try:
+                self._gpu_res = faiss.StandardGpuResources()
+                self.index = faiss.index_cpu_to_gpu(self._gpu_res, 0, cpu_index)
+                log.info("FAISS index moved to GPU: %d vectors", self.index.ntotal)
+            except Exception as e:
+                log.warning("FAISS GPU init failed (%s), using CPU", e)
+                self.index = cpu_index
+        else:
+            self.index = cpu_index
         log.info("FAISS index loaded: %d vectors", self.index.ntotal)
 
         # Load metadata
@@ -232,6 +242,7 @@ class RAGRetriever:
         log.info("FAISS metadata loaded: %d entries", len(self.metadata))
 
         self.available = True
+        self._last_full_warn = 0.0
 
     def retrieve(self, feature_vec: np.ndarray) -> list[dict]:
         """
@@ -311,10 +322,13 @@ class RAGRetriever:
             # FAISS flat indexes don't support deletion,
             # so we rebuild from the newest half when full.
             # In production, consider using IndexIDMap for proper deletion.
-            log.warning(
-                "FAISS index full (%d vectors). Consider rebuilding index.",
-                self.index.ntotal,
-            )
+            now = time.time()
+            if now - self._last_full_warn >= 3600:
+                log.warning(
+                    "FAISS index full (%d vectors). Consider rebuilding index.",
+                    self.index.ntotal,
+                )
+                self._last_full_warn = now
             return
 
         vec_scaled = self.scaler.transform(

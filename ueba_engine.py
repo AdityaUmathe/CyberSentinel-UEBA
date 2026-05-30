@@ -44,6 +44,7 @@ from ueba_preprocessor import FeatureExtractor, UserProfileStore
 from ueba_models.isolation_forest import IsolationForestScorer
 from ueba_models.autoencoder import AutoencoderScorer
 from ueba_models.clusterer import CampaignDetector, RAGRetriever
+from ueba_models.fp_suppressor import FPPatternSuppressor
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -519,6 +520,11 @@ class UEBAEngine:
         self.profile_store = UserProfileStore(paths["profile_db"])
         self.extractor     = FeatureExtractor(cfg, self.profile_store)
 
+        # Analyst-FP suppressor — reads dashboard-written patterns and
+        # drops matching alerts before emission. Lazy mtime reload, so
+        # marks/unmarks in the dashboard take effect on the next event.
+        self.fp_suppressor = FPPatternSuppressor(paths["fp_patterns_file"])
+
         log.info("All components loaded successfully")
 
     def _maybe_reset_alerts_today(self) -> None:
@@ -745,9 +751,25 @@ class UEBAEngine:
                                 from ueba_preprocessor import is_noise as _is_noise_fn
                                 _is_noise = _is_noise_fn(result)
 
+                            # Analyst-FP suppression: if the rule description
+                            # matches a stored FP pattern (created when an
+                            # analyst marked a similar alert as FP), drop the
+                            # alert here. Tracked separately from noise so
+                            # operators can tell "rule said no" from "analyst
+                            # said no".
+                            _fp_pat = None
+                            if not _is_noise:
+                                _fp_pat = self.fp_suppressor.is_fp(
+                                    result,
+                                    (result.get("ueba") or {}).get("processed_at"),
+                                )
+
                             if _is_noise:
                                 self.stats.setdefault("total_suppressed", 0)
                                 self.stats["total_suppressed"] += 1
+                            elif _fp_pat is not None:
+                                self.stats.setdefault("total_fp_suppressed", 0)
+                                self.stats["total_fp_suppressed"] += 1
                             else:
                                 self.stats["total_alerts"] += 1
                                 line_out = json.dumps(result, ensure_ascii=False)
@@ -867,13 +889,21 @@ class UEBAEngine:
             self.stats["total_alerts"] / max(self.stats["total_processed"], 1) * 100
         )
         suppressed = self.stats.get("total_suppressed", 0)
+        # Refresh FP patterns from disk before reporting count, so operators
+        # see the current pattern set rather than whatever was loaded the last
+        # time an alert was scored (which may be far behind during quiet hours).
+        self.fp_suppressor.refresh()
+        fp_suppressed = self.stats.get("total_fp_suppressed", 0)
         log.info(
             "Stats | processed: %d | alerts: %d (%.2f%%) | "
-            "suppressed_noise: %d | errors: %d | rate: %.0f/sec | ae_cache: %d",
+            "suppressed_noise: %d | suppressed_fp: %d (%d patterns) | "
+            "errors: %d | rate: %.0f/sec | ae_cache: %d",
             self.stats["total_processed"],
             self.stats["total_alerts"],
             alert_rate,
             suppressed,
+            fp_suppressed,
+            self.fp_suppressor.pattern_count,
             self.stats["total_errors"],
             rate,
             self.ae_scorer.cache_size,
