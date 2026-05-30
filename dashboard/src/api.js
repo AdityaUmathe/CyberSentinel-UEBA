@@ -187,6 +187,9 @@ export async function unmarkFP(eventId) {
   if (!eventId) return;
   _applyLocalUnmark(eventId);
   _repaintFpAffectedPanels();
+  // Initial toast — replaced with a richer "+ pattern dropped" message once
+  // the server responds (the server also removes any auto-suppression pattern
+  // that was created when this alert was marked).
   showToast("Restored from false positives", "success");
   try {
     const r = await fetch("/api/false-positive/" + encodeURIComponent(eventId), {
@@ -195,6 +198,12 @@ export async function unmarkFP(eventId) {
     const data = await r.json();
     if (!r.ok || data.ok === false) {
       throw new Error((data && data.error) || `HTTP ${r.status}`);
+    }
+    if (data.patterns_removed > 0) {
+      showToast(
+        `Also dropped ${data.patterns_removed} auto-suppression pattern${data.patterns_removed === 1 ? "" : "s"} — similar alerts will resume`,
+        "success",
+      );
     }
     fetchAll().catch(() => {});
   } catch (e) {

@@ -511,6 +511,34 @@ def _add_pattern_if_new(candidate: dict | None):
         return candidate, True
 
 
+def _remove_patterns_for_descriptions(descriptions) -> int:
+    """Drop every FP pattern whose rule_description matches any in the given
+    iterable (whitespace-trimmed, case-insensitive). Persists once if anything
+    changed. Returns the number of patterns removed.
+
+    Used by the FP restore flow so that un-marking an alert also tears down
+    the auto-suppression pattern that was created when it was marked. Without
+    this, Restore only frees the single event from the FP filter while the
+    pattern keeps suppressing every other alert with the same signature —
+    surprising the analyst and starving the engine of those alerts.
+    """
+    targets = {_norm_desc(d) for d in descriptions if d}
+    if not targets:
+        return 0
+    removed = 0
+    with _fp_pat_lock:
+        keep = []
+        for p in _fp_patterns:
+            if _norm_desc(p.get("rule_description")) in targets:
+                removed += 1
+                continue
+            keep.append(p)
+        if removed:
+            _fp_patterns[:] = keep
+            save_fp_patterns()
+    return removed
+
+
 def _read_alerts_from_disk(n: int | None = None) -> list:
     """Refresh the cache from disk and return the raw alert list (no FP filtering)."""
     global _alert_cache, _alert_cache_mtime
@@ -983,11 +1011,30 @@ def mark_false_positive():
 
 @app.route("/api/false-positive/<path:event_id>", methods=["DELETE"])
 def unmark_false_positive(event_id):
+    """Restore an FP-marked alert AND tear down the auto-suppression pattern
+    that was created when it was marked. The mark and the pattern are created
+    together by mark_false_positive — symmetry says they should be torn down
+    together too.
+    """
     with _fp_lock:
         existed = _fp_dict.pop(event_id, None)
         if existed:
             save_fps()
-    return jsonify({"ok": True, "removed": bool(existed)})
+
+    # Resolve the alert's rule description and drop any matching pattern.
+    patterns_removed = 0
+    if existed:
+        raw = _read_alerts_from_disk()
+        alert = next((a for a in raw if a.get("event_id") == event_id), None)
+        if alert:
+            desc = (alert.get("security", {}) or {}).get("signature")
+            patterns_removed = _remove_patterns_for_descriptions([desc])
+
+    return jsonify({
+        "ok":               True,
+        "removed":          bool(existed),
+        "patterns_removed": patterns_removed,
+    })
 
 
 def _event_ids_in_campaign(campaign_id: str) -> list[str]:
@@ -1048,6 +1095,11 @@ def mark_campaign_false_positive(campaign_id):
 
 @app.route("/api/false-positive/campaign/<path:campaign_id>", methods=["DELETE"])
 def unmark_campaign_false_positive(campaign_id):
+    """Restore every alert in a campaign AND drop the auto-suppression
+    patterns that were created when the campaign was marked. Mirrors the
+    per-event unmark — mark and pattern are created together, so torn down
+    together.
+    """
     eids = _event_ids_in_campaign(campaign_id)
     with _fp_lock:
         removed = 0
@@ -1056,7 +1108,22 @@ def unmark_campaign_false_positive(campaign_id):
                 removed += 1
         if removed:
             save_fps()
-    return jsonify({"ok": True, "removed": removed, "campaign_id": campaign_id})
+
+    # Collect descriptions from this campaign's alerts and tear down patterns.
+    raw = _read_alerts_from_disk()
+    by_id = {a.get("event_id"): a for a in raw}
+    descs = {
+        (by_id.get(eid, {}).get("security") or {}).get("signature")
+        for eid in eids if eid in by_id
+    }
+    patterns_removed = _remove_patterns_for_descriptions(descs)
+
+    return jsonify({
+        "ok":               True,
+        "removed":          removed,
+        "campaign_id":      campaign_id,
+        "patterns_removed": patterns_removed,
+    })
 
 
 # ── False-positive PATTERN management ────────────────────────────────────────
