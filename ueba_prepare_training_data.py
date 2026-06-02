@@ -36,7 +36,14 @@ PIPELINE_DIR = Path("/root/NEW_DRIVE/CyberSentinel-Event-Correlation")
 TRAINING_DIR = Path("training_zips")
 OUTPUT       = Path("/data/ueba_training/combined_training.jsonl")
 DONE_LOG     = Path(".prepare_done")
-TMP_BASE     = Path("/dev/shm")
+# Scratch space for decompress + L1 + L2 intermediates. Disk-backed on /data
+# (≈900 GB free) rather than /dev/shm (RAM-backed tmpfs, ~101 GB): the L1+L2
+# intermediates of one large/noisy weekly snapshot — decompressed + normalized
+# + 40 enrich chunks + 40 enriched outputs + merged, all live at once — can
+# exceed /dev/shm and abort the whole retrain with "No space left on device"
+# (the 2026-05-31 failure). /data has the headroom and is cleaned up per-file
+# below (and per-run at startup), so nothing accumulates.
+TMP_BASE     = Path("/data/ueba_training/tmp")
 
 PREPROCESSOR = Path("ueba_preprocessor.py")
 CONFIG_FILE  = Path("ueba_config.yaml")
@@ -97,7 +104,9 @@ def mark_done(filename: str):
 
 
 def shm_free_gb() -> float:
-    st = os.statvfs("/dev/shm")
+    """Free space (GB) on the scratch filesystem (TMP_BASE)."""
+    probe = TMP_BASE if TMP_BASE.exists() else TMP_BASE.parent
+    st = os.statvfs(probe)
     return (st.f_bavail * st.f_frsize) / 1024**3
 
 
@@ -159,6 +168,10 @@ def process_gz(gz_path: Path) -> int:
             "--input",   str(normalized),
             "--output",  str(enriched),
             "--workers", str(N_ENRICH_WORKERS),
+            # Keep the enricher's own chunk scratch on the same disk-backed dir,
+            # not its default /dev/shm — otherwise its 40 chunks + 40 outputs
+            # would stack in RAM on top of our intermediates.
+            "--tmp-dir", str(tmp),
         ]
         if GEOIP_DB.exists(): enrich_cmd += ["--geoip-db",     str(GEOIP_DB)]
         if ASN_DB.exists():   enrich_cmd += ["--asn-db",       str(ASN_DB)]
@@ -200,6 +213,9 @@ def process_gz(gz_path: Path) -> int:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
+    # Scratch dir is disk-backed on /data; ensure it exists before any mkdtemp.
+    TMP_BASE.mkdir(parents=True, exist_ok=True)
+
     log.info("=" * 55)
     log.info("UEBA Training Data Preparation — Incremental Mode")
     log.info("  Pipeline : %s", PIPELINE_DIR)
@@ -213,7 +229,7 @@ def main():
             stale.unlink()
             log.info("Removed stale state file: %s", stale)
 
-    # Clean up any leftover /dev/shm dirs from previous crashed runs
+    # Clean up any leftover scratch dirs from previous crashed runs
     for d in TMP_BASE.glob("ueba_*"):
         shutil.rmtree(d, ignore_errors=True)
         log.info("Cleaned up leftover temp dir: %s", d)

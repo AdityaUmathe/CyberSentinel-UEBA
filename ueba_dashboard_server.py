@@ -24,14 +24,19 @@ a locally-generated summary.
 import argparse
 import json
 import os
+import re
 import time
 import uuid
+import zipfile
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, jsonify, request, send_from_directory, Response, stream_with_context
+from flask import (
+    Flask, jsonify, request, send_from_directory, Response,
+    stream_with_context, has_request_context,
+)
 from flask_cors import CORS
 
 try:
@@ -53,8 +58,24 @@ _DEFAULTS = {
     "agents_registry": "/root/NEW_DRIVE/aditya_ueba/agents.json",
     "false_positives_file": "/root/NEW_DRIVE/aditya_ueba/false_positives.json",
     "fp_patterns_file":     "/root/NEW_DRIVE/aditya_ueba/fp_patterns.json",
-    "max_alerts":      10000,
+    # The engine rotates ueba_alerts.jsonl at midnight, zipping each day to
+    # archive_dir as ueba_alerts_YYYY-MM-DD.jsonl.zip. The dashboard reads the
+    # live file PLUS these archives so the timeline windows (24H…90D / All) have
+    # history to show — without them, "All" would only ever show today.
+    "archive_dir":     "/root/NEW_DRIVE/aditya_ueba/archive",
+    "max_alerts":      500000,
     "cache_ttl_secs":  10,
+    # Timeline-window loading. `history_days` bounds the "All"/90D lookback into
+    # the archives; `max_feed_alerts` caps how many alerts a single windowed
+    # request returns (most-recent kept).
+    #
+    # The cap is large (500k) on purpose. To keep a window that big from shipping
+    # a ~1 GB firehose, the bulk /api/feed payload OMITS each alert's `evidence`
+    # blob (~77% of per-alert bytes) — the dashboard lazy-loads it per row via
+    # /api/evidence/<event_id> only when an analyst expands that row. So 500k
+    # alerts cost ~0.5 KB each on the wire (~260 MB worst case) instead of ~2.3 KB.
+    "history_days":    95,
+    "max_feed_alerts": 500000,
     "ai_analyst": {
         "enabled":     True,
         "model":       "claude-sonnet-4-6",
@@ -134,6 +155,18 @@ FP_PATTERNS_FILE: Path = Path(_DEFAULTS["fp_patterns_file"])
 # ── Alert cache — avoids reading the full file on every API request ──
 _alert_cache: list = []
 _alert_cache_mtime: float = 0.0
+
+# ── Archive cache — historical daily alert zips, keyed by path → (mtime, alerts).
+# Daily archives are written once at the midnight rotation and never change, so
+# a parsed file is cached until its mtime changes (which it never should). Only
+# files inside the requested window are ever opened, so a 7-day view touches ~7
+# small zips and an "All" view touches at most `history_days` of them — once.
+_archive_lock = __import__("threading").Lock()
+_archive_cache: dict = {}        # str(path) -> (mtime, [alerts])
+_archive_warn_at: float = 0.0    # rate-limit malformed-archive warnings (epoch secs)
+_last_window_total: int = 0      # pre-cap count of the most recent windowed read
+_MIN_DT = datetime.min.replace(tzinfo=timezone.utc)
+_ARCHIVE_RE = re.compile(r"ueba_alerts_(\d{4}-\d{2}-\d{2})\.jsonl\.zip$")
 
 # ── False-positive store — in-memory dict, persisted to FP_FILE atomically ──
 # Maps event_id -> {"event_id": ..., "reason": "...", "marked_at": "..."}
@@ -539,8 +572,10 @@ def _remove_patterns_for_descriptions(descriptions) -> int:
     return removed
 
 
-def _read_alerts_from_disk(n: int | None = None) -> list:
-    """Refresh the cache from disk and return the raw alert list (no FP filtering)."""
+def _read_live_alerts(n: int | None = None) -> list:
+    """Read the live ueba_alerts.jsonl (today's alerts), newest `n` lines, with
+    mtime+TTL caching. Returns the raw alert list (no FP filtering), oldest-first.
+    """
     global _alert_cache, _alert_cache_mtime
     if n is None:
         n = CFG["max_alerts"]
@@ -572,13 +607,148 @@ def _read_alerts_from_disk(n: int | None = None) -> list:
     return alerts
 
 
-def load_alerts(n: int | None = None, include_fp: bool = False) -> list:
-    """Load alerts. By default filters out any alert that is FP-marked, either
-    by event_id (per-instance) or by a stored fingerprint pattern
-    (signature_id + user + agent). Pass include_fp=True to opt out (used by
-    the "show FPs" feed view and by /api/false-positives).
+def _alert_ts(a: dict) -> datetime | None:
+    """Best-effort timestamp for windowing/sorting: engine processed_at, else
+    source event_time. Mirrors the client-side timeline filter."""
+    ueba = a.get("ueba") or {}
+    return _parse_iso(ueba.get("processed_at") or a.get("event_time"))
+
+
+def _parse_archive_zip(path: Path) -> list | None:
+    """Unzip a daily archive and parse its JSONL into a list of alert dicts.
+    Returns None on a hard failure (corrupt zip / unreadable) so the caller can
+    skip it without aborting the whole window."""
+    try:
+        alerts: list = []
+        with zipfile.ZipFile(path) as zf:
+            names = [n for n in zf.namelist() if n.endswith(".jsonl")] or zf.namelist()
+            for name in names:
+                with zf.open(name) as fh:
+                    for raw in fh:
+                        line = raw.decode("utf-8", "replace").strip()
+                        if not line:
+                            continue
+                        try:
+                            alerts.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            continue
+        return alerts
+    except Exception:
+        return None
+
+
+def _read_archived_alerts(cutoff: datetime) -> list:
+    """Alerts from daily archive zips whose date is on/after `cutoff`'s date.
+    Each archive is parsed once and cached by mtime (archives never change after
+    the midnight rotation), and only files inside the window are ever opened."""
+    global _archive_warn_at
+    adir = Path(CFG.get("archive_dir") or "")
+    if not adir.is_dir():
+        return []
+    cutoff_date = cutoff.date()
+    out: list = []
+    try:
+        entries = sorted(adir.glob("ueba_alerts_*.jsonl.zip"))
+    except Exception:
+        return []
+    for path in entries:
+        m = _ARCHIVE_RE.search(path.name)
+        if not m:
+            continue
+        try:
+            fdate = datetime.strptime(m.group(1), "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if fdate < cutoff_date:
+            continue
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        with _archive_lock:
+            cached = _archive_cache.get(str(path))
+            if cached and cached[0] == mtime:
+                out.extend(cached[1])
+                continue
+        # Parse outside the lock (unzip can be slow); store under the lock after.
+        alerts = _parse_archive_zip(path)
+        if alerts is None:
+            now = time.time()
+            if now - _archive_warn_at > 300:
+                _archive_warn_at = now
+                print(f"[dashboard] WARNING: could not read archive {path.name}; skipping")
+            continue
+        with _archive_lock:
+            _archive_cache[str(path)] = (mtime, alerts)
+        out.extend(alerts)
+    return out
+
+
+def _read_alerts_windowed(hours: int, n: int | None = None) -> list:
+    """Live + archived alerts within the requested window, oldest-first, capped
+    at `max_feed_alerts` (most-recent kept). hours==0 → full `history_days`.
+
+    Records with an unparseable timestamp are kept (never silently dropped) and
+    sorted as oldest. The pre-cap in-window total is stashed in
+    `_last_window_total` so /api/stats can tell the analyst when a wide window
+    was truncated."""
+    global _last_window_total
+    history_days = int(CFG.get("history_days", 95) or 95)
+    cap = int(CFG.get("max_feed_alerts", 10000) or 10000)
+    now = datetime.now(timezone.utc)
+    cutoff = now - (timedelta(hours=hours) if hours and hours > 0
+                    else timedelta(days=history_days))
+
+    combined = _read_archived_alerts(cutoff) + _read_live_alerts(n)
+    decorated = []
+    for a in combined:
+        ts = _alert_ts(a)
+        if ts is None or ts >= cutoff:
+            decorated.append((ts or _MIN_DT, a))
+    decorated.sort(key=lambda t: t[0])
+    _last_window_total = len(decorated)
+    if len(decorated) > cap:
+        decorated = decorated[-cap:]
+    return [a for _, a in decorated]
+
+
+def _read_all_alerts_for_lookup() -> list:
+    """Live + ALL archived alerts within history_days, UNCAPPED. Used only by the
+    FP mutators to resolve an alert (or campaign) by id — they must find any
+    alert the analyst can currently see, including ones loaded from archives."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=int(CFG.get("history_days", 95) or 95))
+    return _read_archived_alerts(cutoff) + _read_live_alerts()
+
+
+def _window_hours() -> int:
+    """Timeline window (hours) requested via ?hours=N. 0 / absent / invalid → 0
+    ('All', bounded server-side to history_days), matching the default view."""
+    if not has_request_context():
+        return 0
+    v = (request.args.get("hours") or "").strip()
+    if not v:
+        return 0
+    try:
+        h = int(v)
+        return h if h > 0 else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def load_alerts(n: int | None = None, include_fp: bool = False,
+                hours: int | None = None) -> list:
+    """Load alerts for the current timeline window. By default filters out any
+    alert that is FP-marked, either by event_id (per-instance) or by a stored
+    fingerprint pattern (signature_id + user + agent). Pass include_fp=True to
+    opt out (used by the "show FPs" feed view and by /api/false-positives).
+
+    The window comes from the request's ?hours=N (0 = All) unless `hours` is
+    passed explicitly. Spans live + archived alerts so the timeline filters
+    actually have history to show.
     """
-    raw = _read_alerts_from_disk(n)
+    if hours is None:
+        hours = _window_hours()
+    raw = _read_alerts_windowed(hours, n)
     if include_fp:
         return raw
     if not _fp_dict and not _fp_patterns:
@@ -683,6 +853,7 @@ def stats():
             reason_counts[r] += 1
     top_reasons = sorted(reason_counts.items(), key=lambda x: -x[1])[:5]
 
+    cap = int(CFG.get("max_feed_alerts", 10000) or 10000)
     return jsonify({
         "total_alerts":    total,
         "highly_anomalous": highly,
@@ -692,19 +863,32 @@ def stats():
         "unique_users":    unique_users,
         "alert_rate_1h":   len(recent),
         "top_reasons":     [{"reason": r, "count": c} for r, c in top_reasons],
+        # Window truncation honesty: when the selected window holds more alerts
+        # than the cap, the feed shows the most-recent `cap` and the UI says so.
+        "window_total":    _last_window_total,
+        "window_cap":      cap,
+        "window_capped":   _last_window_total > cap,
     })
 
 
-def _alert_to_feed_item(a: dict) -> dict:
+def _alert_to_feed_item(a: dict, include_evidence: bool = True) -> dict:
     """Map a raw alert (as written by the engine) to the compact dict shape
-    consumed by the dashboard feed table. Used by both /api/feed and the
-    SSE /api/stream endpoint.
+    consumed by the dashboard feed table. Used by /api/feed, the SSE
+    /api/stream endpoint, and the per-user/per-agent/FP drilldowns.
+
+    `include_evidence=False` (used by the bulk /api/feed) drops the `evidence`
+    blob — by far the heaviest field (~77% of the JSON) and only needed when an
+    analyst expands a single row. The dashboard then lazy-fetches it via
+    /api/evidence/<event_id>. The small `mitre_techniques` list is kept inline
+    regardless, because the MITRE heatmap aggregates it across the whole feed
+    and can't afford a fetch-per-row.
     """
     ueba = a.get("ueba", {}) or {}
     sec  = a.get("security", {}) or {}
     host = a.get("host", {}) or {}
+    ev   = a.get("evidence", {}) or {}
     eid  = a.get("event_id")
-    return {
+    item = {
         "event_id":     eid,
         "event_time":   a.get("event_time"),
         "processed_at": ueba.get("processed_at"),
@@ -719,19 +903,46 @@ def _alert_to_feed_item(a: dict) -> dict:
         "host":         host.get("name"),
         "host_ip":      host.get("ip"),
         "mitre_tactic": (a.get("context", {}) or {}).get("raw_event", {}).get("rule", {}).get("mitre", {}).get("tactic", []),
-        "evidence":     a.get("evidence", {}),
+        "mitre_techniques": (ev.get("signature", {}) or {}).get("mitre_techniques", []),
         "fp":           _fp_dict.get(eid) if eid else None,
         "fp_pattern":   _matching_pattern(a),
     }
+    if include_evidence:
+        item["evidence"] = ev
+    return item
 
 
 @app.route("/api/feed")
 def feed():
     """Live alert feed — all loaded alerts, newest first.
     FP-marked alerts are filtered out unless ?include_fp=1 is passed.
+
+    Evidence is omitted here (see _alert_to_feed_item) so a wide timeline window
+    can return up to max_feed_alerts rows without shipping a multi-hundred-MB
+    payload; the dashboard lazy-loads each alert's evidence via /api/evidence.
     """
     alerts = load_alerts(include_fp=_wants_include_fp())
-    return jsonify([_alert_to_feed_item(a) for a in reversed(alerts)])
+    return jsonify([_alert_to_feed_item(a, include_evidence=False) for a in reversed(alerts)])
+
+
+@app.route("/api/evidence/<path:event_id>")
+def alert_evidence(event_id):
+    """Evidence blob for one alert, looked up by event_id across the live file
+    and the archives. Backs the dashboard's lazy evidence panel: /api/feed omits
+    evidence to stay light, and this returns it on demand when a row is expanded.
+    Returns {} if the alert isn't found or carries no evidence."""
+    if not event_id:
+        return jsonify({})
+    # Live file first — cheapest and the most likely target for recent alerts.
+    for a in reversed(_read_live_alerts()):
+        if a.get("event_id") == event_id:
+            return jsonify(a.get("evidence", {}) or {})
+    # Then the archives (mtime-cached), newest day first.
+    cutoff = datetime.now(timezone.utc) - timedelta(days=int(CFG.get("history_days", 95) or 95))
+    for a in reversed(_read_archived_alerts(cutoff)):
+        if a.get("event_id") == event_id:
+            return jsonify(a.get("evidence", {}) or {})
+    return jsonify({})
 
 
 @app.route("/api/users")
@@ -995,7 +1206,7 @@ def mark_false_positive():
         save_fps()
 
     # Auto-suppress similar alerts: derive a pattern from the underlying alert.
-    raw = _read_alerts_from_disk()
+    raw = _read_all_alerts_for_lookup()
     alert = next((a for a in raw if a.get("event_id") == eid), None)
     pat, pat_new = (None, False)
     if alert:
@@ -1024,7 +1235,7 @@ def unmark_false_positive(event_id):
     # Resolve the alert's rule description and drop any matching pattern.
     patterns_removed = 0
     if existed:
-        raw = _read_alerts_from_disk()
+        raw = _read_all_alerts_for_lookup()
         alert = next((a for a in raw if a.get("event_id") == event_id), None)
         if alert:
             desc = (alert.get("security", {}) or {}).get("signature")
@@ -1040,7 +1251,7 @@ def unmark_false_positive(event_id):
 def _event_ids_in_campaign(campaign_id: str) -> list[str]:
     """Scan the raw (unfiltered) alert list and return every event_id whose
     ueba.campaign_id equals campaign_id."""
-    raw = _read_alerts_from_disk()
+    raw = _read_all_alerts_for_lookup()
     return [
         a["event_id"]
         for a in raw
@@ -1067,7 +1278,7 @@ def mark_campaign_false_positive(campaign_id):
         save_fps()
 
     # Auto-suppress: one pattern per unique fingerprint in the campaign.
-    raw = _read_alerts_from_disk()
+    raw = _read_all_alerts_for_lookup()
     by_id = {a.get("event_id"): a for a in raw}
     seen: set = set()
     patterns_new = 0
@@ -1110,7 +1321,7 @@ def unmark_campaign_false_positive(campaign_id):
             save_fps()
 
     # Collect descriptions from this campaign's alerts and tear down patterns.
-    raw = _read_alerts_from_disk()
+    raw = _read_all_alerts_for_lookup()
     by_id = {a.get("event_id"): a for a in raw}
     descs = {
         (by_id.get(eid, {}).get("security") or {}).get("signature")
@@ -1443,6 +1654,25 @@ def _parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def _warm_archive_cache() -> None:
+    """Pre-parse archived alert zips within the history window so the first wide
+    ('All'/30D/90D) request doesn't block several seconds on a cold cache. Runs
+    in a daemon thread; the server starts serving immediately regardless."""
+    try:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=int(CFG.get("history_days", 95) or 95))
+        t = time.time()
+        n = len(_read_archived_alerts(cutoff))
+        print(f"[dashboard] archive cache warmed: {n} alerts in {time.time() - t:.1f}s "
+              f"from {CFG.get('archive_dir')}")
+    except Exception as e:  # never let warm-up crash startup
+        print(f"[dashboard] archive cache warm-up failed ({e}) — loading lazily")
+
+
+def _start_archive_warm_thread() -> None:
+    import threading
+    threading.Thread(target=_warm_archive_cache, name="archive-warm", daemon=True).start()
+
+
 def main() -> None:
     global CFG, ALERTS_FILE, AGENTS_REGISTRY, FP_FILE, FP_PATTERNS_FILE
     args = _parse_args()
@@ -1473,7 +1703,10 @@ def main() -> None:
     print(f"  AI analyst:       "
           f"{'enabled' if CFG['ai_analyst'].get('enabled') and os.environ.get('ANTHROPIC_API_KEY') else 'fallback only'}")
     print(f"  Listening on:     http://{CFG['host']}:{CFG['port']}")
+    print(f"  Archive dir:      {CFG.get('archive_dir')}  "
+          f"(history {CFG.get('history_days')}d, feed cap {CFG.get('max_feed_alerts')})")
     _start_agent_sync_thread()
+    _start_archive_warm_thread()
     app.run(host=CFG["host"], port=CFG["port"], debug=args.debug)
 
 

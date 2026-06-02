@@ -2,7 +2,13 @@
 
 import { state } from "../state.js";
 import { navigate } from "../router.js";
+import { fetchEvidence } from "../api.js";
 import { fmtTime, scoreColor, verdictClass, verdictLabel, reasonTag } from "../helpers.js";
+
+// Evidence for bulk-feed rows is lazy-loaded on first expand (the /api/feed
+// payload omits it). Cache by event_id so re-expanding a row — or exporting —
+// never refetches. Keyed evidence objects ({} = looked up, none found).
+export const evidenceCache = new Map();
 
 function evRow(label, value, highlight) {
   if (value === null || value === undefined || value === "") return "";
@@ -17,6 +23,20 @@ export function buildEvidencePanel(ev, alertId, colSpan, eventId, signatureDesc)
   // Persist expanded/collapsed state across re-renders.
   const expanded = state.expandedRows.has(alertId);
   const evStyle  = expanded ? "" : ' style="display:none"';
+
+  // Lazy path: the bulk feed ships rows WITHOUT an `evidence` field (undefined).
+  // If we've already fetched it, use the cache; otherwise emit a stub carrying
+  // the event_id — toggleEvidence()/scrollAndExpand() fetch on expand and swap
+  // in the real panel. Items rendered WITH evidence inline (live SSE alerts,
+  // user/agent/FP drilldowns) skip this entirely.
+  if (ev === undefined && eventId) {
+    const cached = evidenceCache.get(eventId);
+    if (cached !== undefined) {
+      ev = cached;   // fall through to the normal render below
+    } else {
+      return `<tr class="ev-panel-row ev-lazy" id="ev-${alertId}"${evStyle} data-eid="${escapeAttr(eventId)}"><td colspan="${colSpan}"><div class="ev-panel"><div class="ev-empty">Loading evidence…</div></div></td></tr>`;
+    }
+  }
   if (!ev || !Object.keys(ev).length) {
     return `<tr class="ev-panel-row" id="ev-${alertId}"${evStyle}><td colspan="${colSpan}"><div class="ev-empty">No evidence data — restart engine to generate evidence.</div></td></tr>`;
   }
@@ -139,7 +159,35 @@ export function toggleEvidence(alertId) {
     state.expandedRows.add(alertId);
     const btn = document.querySelector(`tr[data-id="${alertId}"] .ev-toggle`);
     if (btn) btn.textContent = "▼";
+    ensureEvidence(alertId, row);
   }
+}
+
+// If `row` is a lazy stub, fetch this alert's evidence (once) and swap in the
+// full panel. No-op for panels already rendered with inline evidence. The fetch
+// failure path leaves the "Loading…" stub so a later expand retries.
+export async function ensureEvidence(alertId, row) {
+  row = row || document.getElementById("ev-" + alertId);
+  if (!row || !row.classList.contains("ev-lazy")) return;
+  const eid = row.getAttribute("data-eid");
+  if (!eid) return;
+  let ev = evidenceCache.get(eid);
+  if (ev === undefined) {
+    try {
+      ev = (await fetchEvidence(eid)) || {};
+    } catch {
+      return;
+    }
+    evidenceCache.set(eid, ev);
+  }
+  // Re-find the stub (a full re-render may have replaced the node) and swap in
+  // the real panel. The sibling data row still holds the signature text for the
+  // FP hint. Lazy rows only ever occur in the main feed (colspan 9).
+  const cur = document.getElementById("ev-" + alertId);
+  if (!cur || !cur.classList.contains("ev-lazy")) return;
+  const dataRow = document.querySelector(`tr.feed-row[data-id="${alertId}"]`);
+  const sig = dataRow ? (dataRow.querySelector(".sig-text")?.textContent || "") : "";
+  cur.outerHTML = buildEvidencePanel(ev, alertId, 9, eid, sig);
 }
 
 export function feedRows(alerts, colSpan, idPrefix) {
@@ -355,6 +403,7 @@ function scrollAndExpand(row, alertId) {
     const btn = row.querySelector(".ev-toggle");
     if (btn) btn.textContent = "▼";
   }
+  if (evRowEl) ensureEvidence(alertId, evRowEl);
 }
 
 export function jumpToAlert(alertId, verdict) {

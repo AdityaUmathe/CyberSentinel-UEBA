@@ -25,7 +25,15 @@ export function applyTimelineFilter() {
       2160: "LAST 90 DAYS",
     }[hours] || "";
   const showingEl = document.getElementById("tl-showing");
-  if (showingEl) showingEl.textContent = label;
+  if (showingEl) {
+    // When the selected window holds more alerts than the server cap, say so —
+    // the feed/charts reflect the most-recent N, not silently-dropped history.
+    const st = state.lastStats;
+    showingEl.textContent =
+      st && st.window_capped
+        ? `${label} · most recent ${st.window_cap.toLocaleString()} of ${st.window_total.toLocaleString()}`
+        : label;
+  }
 
   if (hours === 0) {
     state.feedData   = state.allFeedData;

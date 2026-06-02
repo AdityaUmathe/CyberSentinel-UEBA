@@ -134,6 +134,10 @@ def main():
     parser.add_argument("--reputation-db", default=None)
     parser.add_argument("--overwrite",     action="store_true")
     parser.add_argument("--counter-window-seconds", type=int, default=300)
+    parser.add_argument("--tmp-dir", default=None,
+                        help="Base dir for chunk scratch (default: /dev/shm). "
+                             "Point at a disk-backed dir for large inputs that "
+                             "would overflow the RAM-backed tmpfs.")
 
     args = parser.parse_args()
 
@@ -175,8 +179,13 @@ def main():
 
     t0 = time.time()
 
-    # Use /dev/shm for temp chunk files if available, else system tmp
-    tmp_base = Path("/dev/shm") if Path("/dev/shm").exists() else Path(tempfile.gettempdir())
+    # Temp chunk files: explicit --tmp-dir wins (caller points it at disk-backed
+    # scratch for large inputs); otherwise /dev/shm if present, else system tmp.
+    if args.tmp_dir:
+        tmp_base = Path(args.tmp_dir)
+        tmp_base.mkdir(parents=True, exist_ok=True)
+    else:
+        tmp_base = Path("/dev/shm") if Path("/dev/shm").exists() else Path(tempfile.gettempdir())
     tmp_dir  = Path(tempfile.mkdtemp(prefix="enrich_parallel_", dir=tmp_base))
 
     try:

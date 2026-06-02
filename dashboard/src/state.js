@@ -4,6 +4,19 @@
 // to every other module. This replaces the top-level `let` variables that lived
 // in the original single-file <script>.
 
+// Restore the last-used timeline window (24/72/168/720/1440/2160/0=All) from a
+// previous visit so a browser refresh stays on the same window instead of
+// snapping back to "All". Persisted by the timeline buttons in ui/tabs.js.
+const TIMELINE_ALLOWED = [0, 24, 72, 168, 720, 1440, 2160];
+function restoreTimelineHours() {
+  try {
+    const v = parseInt(localStorage.getItem("cs-timeline-hours"), 10);
+    return TIMELINE_ALLOWED.includes(v) ? v : 0;
+  } catch {
+    return 0;
+  }
+}
+
 export const state = {
   feedFilter: "all",
   feedData: [],
@@ -12,7 +25,7 @@ export const state = {
   agentsData: [],
   selectedAgent: null,
   selectedUser:  null,
-  timelineHours: 0,
+  timelineHours: restoreTimelineHours(),
   allFeedData: [],
   allUsersData: [],
   allAgentsData: [],

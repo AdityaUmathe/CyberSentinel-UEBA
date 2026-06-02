@@ -34,7 +34,12 @@ function _aggregate(alerts) {
   let coverageCount = 0;
   alerts.forEach((a) => {
     const tactics    = a.mitre_tactic || [];
-    const techniques = (a.evidence && a.evidence.signature && a.evidence.signature.mitre_techniques) || [];
+    // The bulk feed carries mitre_techniques inline (cheap) but omits the full
+    // evidence blob; fall back to evidence for any item that still has it (e.g.
+    // live SSE alerts) so coverage is identical either way.
+    const techniques = a.mitre_techniques
+      || (a.evidence && a.evidence.signature && a.evidence.signature.mitre_techniques)
+      || [];
     if (!tactics.length || !techniques.length) return;
     coverageCount++;
     tactics.forEach((tac) => {

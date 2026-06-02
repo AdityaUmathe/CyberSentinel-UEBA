@@ -3,7 +3,17 @@
 // `exportCsv(rows)` produces a flat, analyst-friendly schema (no nested
 // evidence) suitable for opening in Excel/Sheets.
 // `exportJson(rows)` exports the full feed-item shape including evidence so
-// the file can round-trip back into another tool.
+// the file can round-trip back into another tool. Because the bulk feed no
+// longer carries evidence inline (it's lazy-loaded per row), exportJson
+// re-attaches it — from the in-memory cache first, then fetching the rest,
+// capped so an enormous filtered set can't fire tens of thousands of requests.
+
+import { fetchEvidence } from "./api.js";
+import { evidenceCache } from "./panels/feed.js";
+
+// Above this many alerts we skip the evidence re-attach (the JSON still exports,
+// just without nested evidence, flagged via evidence_included:false).
+const EVIDENCE_EXPORT_CAP = 5000;
 
 const CSV_COLUMNS = [
   "processed_at", "event_id", "user", "host", "host_ip",
@@ -76,11 +86,36 @@ export function exportCsv(rows) {
   _download(new Blob([csv], { type: "text/csv;charset=utf-8" }), `ueba-export-${_timestamp()}.csv`);
 }
 
-export function exportJson(rows) {
+// Resolve evidence for any rows that lack it (cache → fetch), with bounded
+// concurrency. Returns a new row array; original rows are left untouched.
+async function _withEvidence(rows) {
+  const missing = rows.filter((a) => a && a.event_id && a.evidence === undefined && !evidenceCache.has(a.event_id));
+  const ids = [...new Set(missing.map((a) => a.event_id))];
+  let i = 0;
+  const worker = async () => {
+    while (i < ids.length) {
+      const id = ids[i++];
+      try { evidenceCache.set(id, (await fetchEvidence(id)) || {}); }
+      catch { evidenceCache.set(id, {}); }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(8, ids.length) }, worker));
+  return rows.map((a) =>
+    a && a.evidence === undefined && a.event_id && evidenceCache.has(a.event_id)
+      ? { ...a, evidence: evidenceCache.get(a.event_id) }
+      : a
+  );
+}
+
+export async function exportJson(rows) {
+  const needFetch = rows.filter((a) => a && a.event_id && a.evidence === undefined && !evidenceCache.has(a.event_id)).length;
+  const withEvidence = needFetch <= EVIDENCE_EXPORT_CAP;
+  const alerts = withEvidence ? await _withEvidence(rows) : rows;
   const payload = {
-    generated_at: new Date().toISOString(),
-    count:        rows.length,
-    alerts:       rows,
+    generated_at:      new Date().toISOString(),
+    count:             rows.length,
+    evidence_included: withEvidence,
+    alerts,
   };
   _download(
     new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }),

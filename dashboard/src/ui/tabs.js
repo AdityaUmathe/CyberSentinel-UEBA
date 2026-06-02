@@ -9,6 +9,7 @@ import { state } from "../state.js";
 import { navigate } from "../router.js";
 import { applyTimelineFilter } from "../panels/timeline-filter.js";
 import { renderFeed, toggleEvidence } from "../panels/feed.js";
+import { fetchAll } from "../api.js";
 
 export function initTabs() {
   // ── Main tabs (Overview / Alert Feed / User Risk / Campaigns / Endpoints) ──
@@ -41,13 +42,29 @@ export function initTabs() {
   });
 
   // ── Timeline filter buttons ──
+  // A window change is a server refetch: older windows (3D…90D / All) live in
+  // the daily archives, not the live file, so we must re-pull with ?hours=N.
+  // fetchAll() repaints every panel (incl. applyTimelineFilter) when it lands.
+  // The selection is persisted to localStorage so a browser refresh restores
+  // the same window (see state.js restoreTimelineHours()).
+  let _tlLoading = false;
   document.querySelectorAll(".tl-btn").forEach((b) => {
     b.addEventListener("click", () => {
+      if (_tlLoading) return;
       document.querySelectorAll(".tl-btn").forEach((x) => x.classList.remove("active"));
       b.classList.add("active");
       state.timelineHours = parseInt(b.dataset.hours);
-      applyTimelineFilter();
+      try { localStorage.setItem("cs-timeline-hours", String(state.timelineHours)); } catch {}
+      const showingEl = document.getElementById("tl-showing");
+      if (showingEl) showingEl.textContent = "LOADING…";
+      _tlLoading = true;
+      fetchAll().finally(() => { _tlLoading = false; });
     });
+  });
+
+  // Sync the highlighted button to the restored window (HTML defaults to ALL).
+  document.querySelectorAll(".tl-btn").forEach((b) => {
+    b.classList.toggle("active", parseInt(b.dataset.hours) === state.timelineHours);
   });
 
   // ── Feed verdict filters ──

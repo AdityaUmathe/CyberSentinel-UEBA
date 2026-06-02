@@ -9,15 +9,30 @@ import { loadUserDetail } from "./panels/user-detail.js";
 import { renderFalsePositives } from "./panels/false-positives.js";
 import { showToast } from "./ui/toast.js";
 
-const feedURL = () => "/api/feed" + (state.showFps ? "?include_fp=1" : "");
+// Every data endpoint is scoped to the selected timeline window via ?hours=N
+// (0 = All). The server reads live + archived alerts for that window, so the
+// 24H/3D/7D/30D/90D/All buttons actually show history. The FP list + patterns
+// are intentionally NOT windowed — analysts want the full set regardless.
+const hoursParam = () => "hours=" + (state.timelineHours || 0);
+const feedURL = () => `/api/feed?${hoursParam()}` + (state.showFps ? "&include_fp=1" : "");
+
+// Lazy evidence fetch. /api/feed omits the (heavy) evidence blob so wide
+// timeline windows stay light; the feed panel calls this when a row is expanded
+// to pull that single alert's evidence on demand. Returns {} if none.
+export async function fetchEvidence(eventId) {
+  if (!eventId) return {};
+  const r = await fetch("/api/evidence/" + encodeURIComponent(eventId));
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.json();
+}
 
 export async function fetchAll() {
   const [stats, feed, users, camps, agents, fps, fpPatterns] = await Promise.all([
-    fetch("/api/stats").then((r) => r.json()),
+    fetch(`/api/stats?${hoursParam()}`).then((r) => r.json()),
     fetch(feedURL()).then((r) => r.json()),
-    fetch("/api/users").then((r) => r.json()),
-    fetch("/api/campaigns").then((r) => r.json()),
-    fetch("/api/agents").then((r) => r.json()),
+    fetch(`/api/users?${hoursParam()}`).then((r) => r.json()),
+    fetch(`/api/campaigns?${hoursParam()}`).then((r) => r.json()),
+    fetch(`/api/agents?${hoursParam()}`).then((r) => r.json()),
     fetch("/api/false-positives").then((r) => r.json()),
     fetch("/api/false-positive-patterns").then((r) => r.json()).catch(() => []),
   ]);
