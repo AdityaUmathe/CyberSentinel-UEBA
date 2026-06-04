@@ -87,7 +87,26 @@ export function applyTimelineFilter() {
       else if (a.verdict === "suspicious")   aMap[h].suspicious++;
       if (!aMap[h].last_seen || a.processed_at > aMap[h].last_seen) aMap[h].last_seen = a.processed_at;
     });
-    state.agentsData = Object.values(aMap).sort(
+    // Endpoints are a fixed fleet (the Wazuh registry), not derived from the
+    // window. Show ALL of them even when windowed: start from the full
+    // registry-backed list and overlay this window's counts (quiet endpoints
+    // keep alert_count 0), then append any in-window hosts not in the registry.
+    const known = new Set();
+    state.agentsData = (state.allAgentsData || []).map((base) => {
+      known.add(base.agent);
+      const w = aMap[base.agent];
+      return w
+        ? { ...base, ip: base.ip || w.ip, alert_count: w.alert_count,
+            max_score: w.max_score, highly_anomalous: w.highly_anomalous,
+            anomalous: w.anomalous, suspicious: w.suspicious,
+            last_seen: w.last_seen }
+        : { ...base, alert_count: 0, max_score: 0, highly_anomalous: 0,
+            anomalous: 0, suspicious: 0 };
+    });
+    Object.values(aMap).forEach((w) => {
+      if (!known.has(w.agent)) state.agentsData.push(w);
+    });
+    state.agentsData.sort(
       (a, b) => b.highly_anomalous - a.highly_anomalous || b.max_score - a.max_score
     );
   }
