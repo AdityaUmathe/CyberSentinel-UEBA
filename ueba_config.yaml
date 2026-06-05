@@ -190,7 +190,9 @@ score_fusion:
 rag:
   top_k: 5
   min_similarity: 0.60
-  max_index_size: 7000000
+  max_index_size: 7000000        # runtime ceiling — add_to_index() refuses beyond this
+  index_build_fraction: 0.8      # trainer seeds the index to 80% of the ceiling,
+                                 # leaving headroom so runtime adds can grow it
 
   embedding_fields:
     - "event_category"

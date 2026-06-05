@@ -599,15 +599,28 @@ class UEBATrainer:
 
         feature_dim = self.config["preprocessing"]["feature_dim"]
         max_size    = self.config["rag"]["max_index_size"]
+        # Build to a fraction of the runtime ceiling, not all the way to it, so
+        # the engine's add_to_index() has headroom to append fresh anomalies
+        # between retrains. Building to exactly max_size makes the index "born
+        # full": add_to_index then refuses every new vector and logs "index
+        # full" forever, so the RAG layer never learns anything post-training.
+        build_frac   = float(self.config["rag"].get("index_build_fraction", 0.8))
+        build_target = max(1, int(max_size * build_frac))
 
-        log.info("Building FAISS index | max_size: %d", max_size)
+        log.info("Building FAISS index | max_size: %d | build_target: %d (%.0f%%)",
+                 max_size, build_target, build_frac * 100)
 
         with h5py.File(h5_path, "r") as f:
             total = f["features"].shape[0]
-            actual = min(max_size, total)
+            actual = min(build_target, total)
             stride = max(1, total // actual)
-            X = f["features"][::stride].astype(np.float32)
+            # f["features"][::stride] yields ceil(total/stride) rows, which can
+            # exceed `actual`; truncate to `actual` so the vector count exactly
+            # matches `metas`. Without the [:actual] slice the index ends up with
+            # MORE vectors than metadata entries, and every surplus vector is
+            # silently unretrievable (retrieve() drops idx >= len(metadata)).
             stride_indices = list(range(0, total, stride))[:actual]
+            X = f["features"][::stride][:actual].astype(np.float32)
             metas = [json.loads(f["metadata"][i]) for i in stride_indices]
 
         log.info("  Read %d rows for FAISS (stride=%d)", len(X), stride)
