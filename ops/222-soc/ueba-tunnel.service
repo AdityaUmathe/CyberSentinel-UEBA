@@ -1,0 +1,28 @@
+# UEBA reverse SSH tunnel — runs on the SOC host (222).
+# Deploy to: /etc/systemd/system/ueba-tunnel.service
+#   systemctl daemon-reload && systemctl enable --now ueba-tunnel.service
+#
+# 222 is NAT'd / not reachable inbound, so the feed tunnel must be established
+# BY 222: it binds 98's localhost:2222 back to 222:22, which the engine host's
+# bridge (ueba_sync_bridge.sh) then consumes as soc@localhost:2222.
+#
+# Key points learned the hard way (see ops/README.md):
+#   * MUST pass -i /root/.ssh/id_tunnel — root's default keys are absent on 222,
+#     so without this autossh silently falls back to password auth and flaps.
+#   * autossh -M 0 + AUTOSSH_GATETIME=0 + ServerAlive* keepalives + Restart=always
+#     give a self-healing tunnel that survives reboots and network blips.
+#   * Replace <ENGINE_98_PUBLIC_IP> with the engine host's reachable IP.
+[Unit]
+Description=UEBA reverse SSH tunnel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=root
+Environment=AUTOSSH_GATETIME=0
+ExecStart=/usr/bin/autossh -M 0 -N -i /root/.ssh/id_tunnel -o IdentitiesOnly=yes -o ExitOnForwardFailure=yes -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -R 2222:localhost:22 root@<ENGINE_98_PUBLIC_IP>
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

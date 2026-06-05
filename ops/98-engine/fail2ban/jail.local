@@ -1,0 +1,35 @@
+# UEBA hardening — fail2ban jail for the engine host (98).
+# Deploy to: /etc/fail2ban/jail.local   then: systemctl restart fail2ban
+#
+# Bans SSH brute-forcers at 98's local netfilter (nftables backend) so the
+# :22 flood cannot starve sshd / the 222 reverse tunnel. Host-level only.
+#
+# NOTE: the real ignoreip values are deliberately NOT committed (they reveal
+# admin/office/tunnel source IPs). Fill them in at deploy time — the live list
+# lives in the private ops runbook. See ops/README.md.
+[DEFAULT]
+backend   = systemd
+banaction = nftables-multiport
+banaction_allports = nftables-allports
+
+# Never ban: loopback, the dev/admin boxes, and 222's tunnel egress (NAT —
+# dynamic, so keep both the live egress and any documented fallback). Losing
+# any of these would break ops or the feed.
+#   <DEV_BOX_IP>        — workstation used to drive deploys
+#   <OFFICE_IP>         — admin/office egress
+#   <SOC_222_EGRESS>    — 222's current NAT egress (verify: ss -tnp | grep :2222)
+#   <SOC_222_EGRESS_FALLBACK> — previously-seen 222 egress
+ignoreip = 127.0.0.1/8 ::1 <DEV_BOX_IP> <OFFICE_IP> <SOC_222_EGRESS> <SOC_222_EGRESS_FALLBACK>
+
+# 5 failures within 10m → ban; escalating each repeat offence, capped at 1w.
+maxretry = 5
+findtime = 10m
+bantime  = 1h
+bantime.increment = true
+bantime.factor    = 2
+bantime.maxtime   = 1w
+
+[sshd]
+enabled = true
+port    = ssh
+mode    = aggressive

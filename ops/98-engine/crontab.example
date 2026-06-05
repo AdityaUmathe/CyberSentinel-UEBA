@@ -1,0 +1,9 @@
+# UEBA engine-host (98) root crontab entries.
+# Install with: crontab -e   (these are the only UEBA-related lines)
+
+# Daily maintenance at 00:05 — archive yesterday's alerts, flush enriched.jsonl
+# (size/age/backlog-guarded), prune old archives, restart the engine.
+5 0 * * * /root/NEW_DRIVE/aditya_ueba/ueba_rotate.sh
+
+# Weekly behavioural-baseline retrain, Sundays 03:30.
+30 3 * * 0 /root/NEW_DRIVE/aditya_ueba/ueba_weekly_retrain.sh
