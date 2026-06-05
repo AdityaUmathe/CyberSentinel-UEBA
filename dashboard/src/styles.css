@@ -2954,3 +2954,37 @@
     .kbd-help-card { max-height: 88vh; }
   }
 
+/* ── Global stale-feed banner ───────────────────────────────────────────────
+   Full-width strip below the header, surfaced by ui/feed-stale-banner.js when
+   the alert stream freezes. Amber = stalling, red (pulsing) = appears down. */
+.feed-stale-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 9px 18px;
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  text-align: center;
+  border-bottom: 1px solid transparent;
+}
+.feed-stale-banner[hidden] { display: none; }
+.feed-stale-banner strong { font-weight: 700; }
+.feed-stale-banner.warn {
+  background: rgba(255, 140, 66, 0.12);
+  color: var(--orange);
+  border-bottom-color: rgba(255, 140, 66, 0.40);
+}
+.feed-stale-banner.down {
+  background: rgba(255, 59, 92, 0.14);
+  color: var(--red);
+  border-bottom-color: rgba(255, 59, 92, 0.45);
+  animation: feedStalePulse 2s ease-in-out infinite;
+}
+@keyframes feedStalePulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.65; }
+}
+
