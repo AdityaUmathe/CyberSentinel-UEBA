@@ -4263,11 +4263,11 @@ document.addEventListener('mouseover', function(e) {
         <div class="fp-contact-grid">
           <div class="fp-contact-card">
             <div class="label">Email</div>
-            <div class="value">support@virtualgalaxy.in</div>
+            <div class="value">support@vgipl.com</div>
           </div>
           <div class="fp-contact-card">
             <div class="label">Phone</div>
-            <div class="value">+91 XXXXX XXXXX</div>
+            <div class="value">+91 77980 26888</div>
           </div>
           <div class="fp-contact-card">
             <div class="label">Support Hours</div>
@@ -4295,11 +4295,11 @@ document.addEventListener('mouseover', function(e) {
       <div class="fp-section">
         <div class="fp-section-title">Frequently Asked Questions</div>
         <p><strong style="color:var(--text)">Q: How do I add a new agent?</strong></p>
-        <p>Add your answer here. Describe the steps to register a new endpoint agent in the system.</p>
+        <p>Agents are discovered automatically. Deploy the monitoring agent on the endpoint and enrol it with your manager — the platform periodically reads the manager's agent inventory and the new endpoint appears in the <em style="color:var(--accent)">Endpoints</em> tab within about a minute. No manual entry in the dashboard is required.</p>
         <p><strong style="color:var(--text)">Q: What does a "highly anomalous" verdict mean?</strong></p>
-        <p>Add your answer here. Explain the scoring thresholds and what actions should be taken.</p>
+        <p>Every event is scored from 0 to 1 by the three-layer engine (isolation forest, per-user autoencoders, and the FAISS similarity model). A score of <strong style="color:var(--text)">0.75 or above</strong> raises an alert, and the verdict escalates <em>suspicious → anomalous → highly anomalous</em> as the score climbs. "Highly anomalous" is the top band: a strong deviation from that user's normal baseline across several signals — these should be triaged promptly.</p>
         <p><strong style="color:var(--text)">Q: How often does the dashboard refresh?</strong></p>
-        <p>Add your answer here. Describe the auto-refresh interval and manual refresh options.</p>
+        <p>New alerts stream in live over a persistent connection (Server-Sent Events); the aggregate panels (risk meter, user/agent metrics, campaigns) reconcile every 60 seconds. Use the manual <em style="color:var(--accent)">Refresh</em> control to force an immediate pull, and the timeline buttons (24H default) to change the window.</p>
       </div>
 
       <div class="fp-section">
@@ -4356,17 +4356,17 @@ document.addEventListener('mouseover', function(e) {
 
       <div class="fp-section">
         <div class="fp-section-title">Data Retention</div>
-        <p>Add your data retention policy here. Describe how long event data, alerts, and user records are retained before being purged or archived.</p>
+        <p>Data is retained only as long as it is needed for detection, investigation, and audit. All retention windows are configurable per deployment; the defaults are:</p>
         <ul>
-          <li>Alert records: XX days (configurable)</li>
-          <li>Raw event logs: XX days (configurable)</li>
-          <li>User risk profiles: Retained while agent is active</li>
+          <li>Alert records: archived daily and retained for <strong style="color:var(--text)">120 days</strong>, then automatically purged (configurable).</li>
+          <li>Raw event logs: held in a rolling buffer and flushed every <strong style="color:var(--text)">~3 days</strong> or once a size cap is reached (configurable).</li>
+          <li>User risk profiles &amp; behavioural models: retained while the associated endpoint/agent remains active, and pruned when it is decommissioned.</li>
         </ul>
       </div>
 
       <div class="fp-section">
         <div class="fp-section-title">Data Security</div>
-        <p>All data processed by CyberSentinel UEBA is stored within your organisation's infrastructure. Add details about encryption at rest, encryption in transit, access controls, and any relevant certifications (ISO 27001, SOC 2, etc.) here.</p>
+        <p>All data processed by CyberSentinel UEBA stays within your organisation's own infrastructure — it is never transmitted to Virtual Galaxy or any third party. IP geolocation is performed entirely on-premises against a local database, with no external lookups. Data is protected by your environment's encryption in transit and at rest and by role-based access controls on the dashboard. Details of our information-security certifications are available from your Virtual Galaxy account manager on request.</p>
       </div>
 
       <div class="fp-section">
@@ -4375,11 +4375,11 @@ document.addEventListener('mouseover', function(e) {
         <div class="fp-contact-grid">
           <div class="fp-contact-card">
             <div class="label">Data Protection Contact</div>
-            <div class="value">privacy@virtualgalaxy.in</div>
+            <div class="value">privacy@vgipl.com</div>
           </div>
           <div class="fp-contact-card">
             <div class="label">Registered Address</div>
-            <div class="value">Virtual Galaxy Infotech Pvt. Ltd., India</div>
+            <div class="value">Virtual Galaxy Infotech Pvt. Ltd., Nagpur, Maharashtra, India</div>
           </div>
         </div>
       </div>
