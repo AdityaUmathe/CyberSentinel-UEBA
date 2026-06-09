@@ -17,6 +17,7 @@ import { initFooter, openFooterPage, closeFooterPage } from "./ui/footer.js";
 import { initInfoTooltip } from "./ui/info-tooltip.js";
 import { initTabs } from "./ui/tabs.js";
 import { initShortcuts } from "./ui/shortcuts.js";
+import { initThreatMap } from "./panels/threatmap.js";
 import { initFeedToolbar } from "./panels/feed-toolbar.js";
 import { jumpToAlert, toggleEvidence } from "./panels/feed.js";
 import { goToAgent, loadAgentDetail, switchAgentTab, goToFeedWithFilter } from "./panels/agents.js";
@@ -108,6 +109,7 @@ initTabs();
 initFeedToolbar();
 initUserDetail();
 initShortcuts();
+initThreatMap();   // live firewall geoIP globe (lazy — builds on first tab open)
 
 // ── Show FPs toggle in the feed header ───────────────────────────────────────
 const fpToggle = document.getElementById("fp-toggle-cb");

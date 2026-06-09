@@ -45,6 +45,7 @@
   <div class="tab" data-tab="campaigns">Campaigns</div>
   <div class="tab" data-tab="endpoints">Endpoints</div>
   <div class="tab" data-tab="false-positives">False Positives <span class="nav-pill" id="fp-nav-badge">0</span></div>
+  <div class="tab" data-tab="threatmap">Threat Map <span class="tm-live-pill">● LIVE</span></div>
   <div class="tl-nav-bar">
     <span class="tl-label">WINDOW</span>
     <button class="tl-btn" data-hours="24">24H</button>
@@ -602,6 +603,55 @@
           <tbody id="fp-tbody"></tbody>
         </table>
       </div>
+    </div>
+  </div>
+
+  <!-- ── Threat Map (live firewall geoIP globe) ── -->
+  <div class="page" id="page-threatmap">
+    <div class="tm-wrap">
+      <div class="tm-globe-col">
+        <div id="threatmap-globe" class="tm-globe"></div>
+        <div class="tm-legend">
+          <span class="tm-lg tm-lg-high"><i></i>Failed / Blocked</span>
+          <span class="tm-lg tm-lg-med"><i></i>Firewall activity</span>
+          <span class="tm-lg tm-lg-low"><i></i>VPN / Passed</span>
+          <span class="tm-lg tm-lg-dc"><i></i>Datacenter</span>
+        </div>
+        <div id="tm-offline" class="tm-offline">
+          <div class="tm-offline-box">
+            <div class="tm-offline-icon">🌐</div>
+            <div class="tm-offline-title">GeoIP database unavailable</div>
+            <div class="tm-offline-sub">The live map needs a local MaxMind GeoLite2-City DB on the server.</div>
+          </div>
+        </div>
+      </div>
+
+      <aside class="tm-side">
+        <div class="tm-panel">
+          <div class="tm-side-title">⬡ Live Firewall Attacks</div>
+          <div class="tm-stats">
+            <div class="tm-stat"><b id="tm-stat-events">0</b><span>EVENTS / WINDOW</span></div>
+            <div class="tm-stat"><b id="tm-stat-mapped">0</b><span>GEO-MAPPED</span></div>
+            <div class="tm-stat"><b id="tm-stat-ips">0</b><span>UNIQUE SOURCE IPs</span></div>
+            <div class="tm-stat"><b id="tm-stat-countries">0</b><span>COUNTRIES</span></div>
+          </div>
+        </div>
+
+        <div class="tm-panel tm-grow">
+          <div class="tm-side-title">↗ Top Source Countries</div>
+          <div id="tm-countries" class="tm-countries"></div>
+        </div>
+
+        <div class="tm-panel">
+          <div class="tm-side-title">⚑ Top Firewall Signatures</div>
+          <div id="tm-sigs" class="tm-sigs"></div>
+        </div>
+
+        <div class="tm-panel tm-grow">
+          <div class="tm-side-title">⟜ Live Attack Stream</div>
+          <div id="tm-ticker" class="tm-ticker"></div>
+        </div>
+      </aside>
     </div>
   </div>
 
