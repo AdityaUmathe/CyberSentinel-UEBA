@@ -189,6 +189,21 @@ def is_noise(log: dict) -> bool:
     if sig_id in _NOISE_SIGNATURE_IDS:
         return True
 
+    # Suppress self-monitoring web access-log noise: health-check / probe
+    # requests against the platform's own internal API endpoints (paths under
+    # "/api/", e.g. /api/stats, /api/health, /api/stream). These fire the web
+    # access-log rules (31101 "Web server 400 error code", 31151 "Multiple 400
+    # errors from same source") in huge volume — the URL path gets parsed as the
+    # "user" and the sheer frequency trips high_frequency/highly_anomalous — but
+    # they carry no security signal (it's the monitoring talking to itself).
+    # Scoped to /api/ paths only, so real web-attack 4xx on app routes (login,
+    # admin, wp-admin, …) is still detected.
+    if sig_id in ("31101", "31151"):
+        req_path = str(get_nested(log, "object.name") or
+                       get_nested(log, "object.id") or "").lower()
+        if req_path.startswith("/api/"):
+            return True
+
     # Also suppress if no anomaly flags are set AND event is pure Fortigate
     # network allow/pass with anomaly_count == 0
     source = str(get_nested(log, "context.source") or "")
