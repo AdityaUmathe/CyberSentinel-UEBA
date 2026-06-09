@@ -1,0 +1,15 @@
+{
+  "name": "@vg/threat-globe-backend",
+  "version": "1.0.0",
+  "description": "Node geofeed backend for the threat-globe widget — GeoLite2 geoIP + incoming/outgoing classification",
+  "type": "module",
+  "main": "geofeed.js",
+  "exports": {
+    ".": "./geofeed.js",
+    "./classify": "./classify.js"
+  },
+  "files": ["geofeed.js", "classify.js"],
+  "dependencies": {
+    "maxmind": "^4.3.0"
+  }
+}

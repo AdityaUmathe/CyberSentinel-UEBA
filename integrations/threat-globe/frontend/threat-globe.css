@@ -1,0 +1,119 @@
+/* Self-contained styles for <ThreatGlobe />. Everything is scoped under .tg-root
+   and uses its own theme tokens (override them on .tg-root to re-theme). No
+   dependency on the host app's CSS. */
+
+.tg-root {
+  --tg-bg1: #060a0e;
+  --tg-bg2: #0b1118;
+  --tg-bg3: #0f1720;
+  --tg-border: #1a2838;
+  --tg-border2: #1f3248;
+  --tg-text: #c8d8e8;
+  --tg-text2: #7a9ab5;
+  --tg-text3: #f3f5f8;
+  --tg-accent: #00d4ff;
+  --tg-mono:  "Barlow Condensed", "IBM Plex Sans", system-ui, sans-serif;
+  --tg-mono2: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
+  --tg-sans:  "IBM Plex Sans", system-ui, sans-serif;
+
+  position: relative;
+  width: 100%;
+  color: var(--tg-text);
+  font-family: var(--tg-sans);
+  box-sizing: border-box;
+}
+.tg-root *, .tg-root *::before, .tg-root *::after { box-sizing: border-box; }
+
+.tg-wrap { display: flex; gap: 14px; height: 100%; min-height: 460px; }
+
+.tg-globe-col {
+  position: relative; flex: 1 1 auto; min-width: 0;
+  border: 1px solid var(--tg-border); border-radius: 10px; overflow: hidden;
+  background: radial-gradient(ellipse at 50% 40%, #06121f 0%, #01030a 70%, #000 100%);
+  box-shadow: inset 0 0 120px rgba(0, 0, 0, 0.6);
+}
+.tg-globe { width: 100%; height: 100%; }
+.tg-globe canvas { display: block; }
+
+/* Cursor tooltip (engine-owned) */
+.tg-tooltip {
+  position: absolute; left: 0; top: 0; z-index: 7; pointer-events: none; display: none;
+  min-width: 150px; max-width: 280px; padding: 8px 11px;
+  background: rgba(3, 10, 18, 0.92); border: 1px solid rgba(0, 212, 255, 0.45);
+  border-radius: 7px; color: var(--tg-text);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.6); backdrop-filter: blur(5px);
+}
+.tg-tooltip.show { display: block; }
+.tg-tt-title { font-family: var(--tg-mono); font-size: 14px; line-height: 1.2; margin-bottom: 5px; white-space: normal; word-break: break-word; }
+.tg-tt-cat { font-family: var(--tg-mono2); font-size: 10px; letter-spacing: 0.4px; text-transform: uppercase; margin: -2px 0 5px; }
+.tg-tt-row { display: flex; justify-content: space-between; gap: 12px; font-size: 11px; line-height: 1.55; }
+.tg-tt-row span { color: var(--tg-text2); flex: 0 0 auto; }
+.tg-tt-row b { color: var(--tg-text); font-family: var(--tg-mono2); font-weight: 500; text-align: right; word-break: break-word; min-width: 0; }
+
+/* Filter bar (legend doubles as direction/category filter) */
+.tg-filters {
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: 12px;
+  display: flex; flex-wrap: wrap; justify-content: center; gap: 8px;
+  padding: 7px 10px; background: rgba(3, 8, 14, 0.66);
+  border: 1px solid var(--tg-border); border-radius: 9px; backdrop-filter: blur(6px);
+  z-index: 4; max-width: calc(100% - 24px);
+}
+.tg-filt {
+  display: inline-flex; align-items: center; gap: 7px; padding: 5px 10px;
+  background: var(--tg-bg3); border: 1px solid var(--tg-border2); border-radius: 6px;
+  color: var(--tg-text); font-family: var(--tg-mono2); font-size: 10.5px; letter-spacing: 0.3px;
+  cursor: pointer; user-select: none; transition: opacity 0.15s, border-color 0.15s, background 0.15s;
+}
+.tg-filt i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; box-shadow: 0 0 8px currentColor; }
+.tg-filt b { font-family: var(--tg-mono); font-size: 11px; color: var(--tg-text2); padding-left: 2px; }
+.tg-filt:hover { border-color: var(--tg-accent); }
+.tg-filt.off { opacity: 0.4; background: transparent; }
+.tg-filt.off i { box-shadow: none; opacity: 0.5; }
+.tg-filt-dc { display: inline-flex; align-items: center; gap: 7px; padding: 5px 8px; color: var(--tg-text2); font-family: var(--tg-mono2); font-size: 10.5px; }
+.tg-filt-dc i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; background: #7cffcb; color: #7cffcb; box-shadow: 0 0 8px currentColor; }
+
+/* GeoIP-unavailable overlay */
+.tg-offline { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(2, 6, 12, 0.82); z-index: 6; }
+.tg-offline-box { text-align: center; max-width: 320px; }
+.tg-offline-icon { font-size: 40px; opacity: 0.7; }
+.tg-offline-title { font-family: var(--tg-mono); font-size: 20px; color: var(--tg-text); margin-top: 8px; letter-spacing: 0.5px; }
+.tg-offline-sub { color: var(--tg-text2); font-size: 12px; margin-top: 6px; }
+
+/* Sidebar */
+.tg-side { flex: 0 0 340px; display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow: hidden; }
+.tg-panel { background: var(--tg-bg2); border: 1px solid var(--tg-border); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; min-height: 0; flex: 0 0 auto; }
+.tg-panel.tg-grow { flex: 1 1 0; min-height: 96px; overflow: hidden; }
+.tg-side-title { font-family: var(--tg-mono); font-size: 13px; letter-spacing: 0.6px; color: var(--tg-text); text-transform: uppercase; margin-bottom: 10px; flex: 0 0 auto; }
+
+.tg-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.tg-stat { background: var(--tg-bg3); border: 1px solid var(--tg-border); border-radius: 8px; padding: 8px 10px; min-width: 0; }
+.tg-stat b { display: block; font-family: var(--tg-mono); font-size: 23px; line-height: 1.1; color: var(--tg-accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tg-stat span { font-family: var(--tg-mono2); font-size: 9px; letter-spacing: 0.4px; color: var(--tg-text2); display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.tg-countries { overflow-y: auto; flex: 1 1 auto; min-height: 0; padding-right: 2px; }
+.tg-crow { display: grid; grid-template-columns: 20px 1fr 70px 44px; align-items: center; gap: 8px; padding: 4px 0; font-size: 12px; }
+.tg-flag { font-size: 14px; }
+.tg-cn { color: var(--tg-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tg-bar { height: 6px; background: var(--tg-bg3); border-radius: 4px; overflow: hidden; }
+.tg-bar i { display: block; height: 100%; background: linear-gradient(90deg, #0099bb, #ff3b5c); border-radius: 4px; }
+.tg-ct { font-family: var(--tg-mono2); font-size: 11px; color: var(--tg-text2); text-align: right; }
+
+.tg-sigs { display: flex; flex-direction: column; gap: 5px; max-height: 170px; overflow-y: auto; }
+.tg-sig { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--tg-text2); }
+.tg-sig span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tg-sig b { color: var(--tg-text); font-family: var(--tg-mono2); }
+
+.tg-ticker { overflow-y: auto; flex: 1 1 auto; min-height: 0; padding-right: 2px; }
+.tg-tick { display: grid; grid-template-columns: 10px 1fr auto; grid-template-areas: "dot tip ip" "dot sig sig"; align-items: center; gap: 2px 8px; padding: 5px 0; border-bottom: 1px solid var(--tg-border); animation: tgTickIn 0.35s ease; }
+@keyframes tgTickIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; } }
+.tg-dot { grid-area: dot; width: 8px; height: 8px; border-radius: 50%; box-shadow: 0 0 6px currentColor; }
+.tg-tip { grid-area: tip; color: var(--tg-text); font-size: 12px; }
+.tg-tip2 { grid-area: ip; font-family: var(--tg-mono2); font-size: 10px; color: var(--tg-text2); }
+.tg-tsig { grid-area: sig; font-size: 10px; color: var(--tg-text2); }
+.tg-empty { color: var(--tg-text2); font-size: 11px; padding: 8px 0; }
+
+@media (max-width: 980px) {
+  .tg-wrap { flex-direction: column; }
+  .tg-globe-col { min-height: 60vh; }
+  .tg-side { flex-basis: auto; }
+}

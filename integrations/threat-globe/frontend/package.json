@@ -1,0 +1,24 @@
+{
+  "name": "@vg/threat-globe",
+  "version": "1.0.0",
+  "description": "Live firewall threat-map — 3D globe React component + framework-agnostic engine",
+  "type": "module",
+  "main": "index.js",
+  "module": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./ThreatGlobe": "./ThreatGlobe.jsx",
+    "./engine": "./globeEngine.js",
+    "./categories": "./categories.js",
+    "./styles.css": "./threat-globe.css"
+  },
+  "files": ["index.js", "ThreatGlobe.jsx", "globeEngine.js", "categories.js", "threat-globe.css"],
+  "sideEffects": ["*.css"],
+  "peerDependencies": {
+    "react": ">=17",
+    "react-dom": ">=17"
+  },
+  "dependencies": {
+    "globe.gl": "^2.46.0"
+  }
+}
