@@ -77,6 +77,22 @@ _DEFAULTS = {
     # alerts cost ~0.5 KB each on the wire (~260 MB worst case) instead of ~2.3 KB.
     "history_days":    95,
     "max_feed_alerts": 500000,
+    # Live threat map (firewall geoIP). The /api/geofeed endpoint tails recent
+    # FIREWALL events from the enriched feed, geolocates each external source IP
+    # via a local MaxMind GeoLite2 DB (fully offline, no API key), and serves
+    # source→datacenter arcs to the globe.gl panel. If the GeoLite2 DB or the
+    # geoip2 lib is absent the endpoint degrades to empty (geo_ok=false).
+    "enriched_file": "/root/NEW_DRIVE/aditya_ueba/enriched.jsonl",
+    "geoip_city_db": "",   # explicit path; empty → auto-detect from known locations
+    "geoip_asn_db":  "",
+    "threatmap": {
+        "window_bytes": 12582912,   # tail this many bytes of enriched.jsonl (~last few min)
+        "max_arcs":     400,        # cap arcs returned per poll (most-recent kept)
+        "dc_ip":        "103.76.143.84",   # WAN/DC anchor IP — geolocated for the arc target
+        "dc_lat":       21.1463,    # fallback DC coords (Nagpur, IN) if dc_ip won't resolve
+        "dc_lng":       79.0849,
+        "dc_label":     "VG Datacenter",
+    },
     "ai_analyst": {
         "enabled":     True,
         "model":       "claude-sonnet-4-6",
@@ -807,10 +823,30 @@ def _wants_include_fp() -> bool:
     return v in ("1", "true", "yes", "y")
 
 
+def _looks_like_request(v) -> bool:
+    """True if a string looks like an HTTP request path / URL / query rather than
+    a username. Web-attack decoders (SQLi/XSS scans on /search.php?q=...) put the
+    raw request in object.name, which must NEVER be shown as a 'user' — otherwise
+    every unique attack payload becomes its own bogus user in the risk view.
+    Real usernames (incl. DOMAIN\\user) never start with '/' or contain '?'/'%2'."""
+    if not isinstance(v, str):
+        return False
+    s = v.strip()
+    if not s:
+        return False
+    return (s.startswith("/") or s.startswith("http://") or s.startswith("https://")
+            or "?" in s or "%2" in s or "../" in s or "<" in s)
+
+
 def get_user(alert: dict) -> str:
     """Resolve the most meaningful username from an alert.
-    Priority: subject.name > raw_event user fields > object.name
-              > subject.ip > ae model (if personal) > host.name > 'unknown'
+    Priority: subject.name > raw_event user fields > object.name (if not a URL)
+              > host/agent name > subject.ip > ae model (if personal) > 'unknown'
+
+    Request-like values (URLs/paths/queries from web-attack events) are rejected
+    at every step, and user-less events fall back to the AGENT name rather than a
+    raw IP — so web scans group under their target agent (e.g. 'Agent-70') instead
+    of flooding the view with one 'user' per attack payload.
     """
     sub  = alert.get("subject", {}) or {}
     obj  = alert.get("object", {}) or {}
@@ -821,23 +857,29 @@ def get_user(alert: dict) -> str:
     wed  = (win.get("eventdata", {}) or {})
     raw_data = raw.get("data", {}) or {}
 
-    name = sub.get("name")
-    if name and name not in ("", None):
-        return name
+    def _ok(v):
+        return v and v not in ("", "-", None) and not _looks_like_request(v)
+
+    if _ok(sub.get("name")):
+        return sub["name"]
 
     for field in ("subjectUserName", "targetUserName", "subjectDomainName"):
-        v = wed.get(field)
-        if v and v not in ("", "-", None):
-            return v
+        if _ok(wed.get(field)):
+            return wed[field]
 
     for field in ("srcuser", "dstuser", "user", "username", "accountName"):
-        v = raw_data.get(field)
-        if v and v not in ("", "-", None):
-            return v
+        if _ok(raw_data.get(field)):
+            return raw_data[field]
 
-    name = obj.get("name")
-    if name and name not in ("", None):
-        return name
+    if _ok(obj.get("name")):
+        return obj["name"]
+
+    # No real username — prefer the AGENT/host name over a bare IP so web-attack
+    # scans and other user-less events group under their agent instead of a
+    # request URL or a raw IP.
+    hname = host.get("name")
+    if hname and hname not in ("", None):
+        return hname
 
     ip = sub.get("ip")
     if ip and ip not in ("", None):
@@ -846,10 +888,6 @@ def get_user(alert: dict) -> str:
     model = ueba.get("raw_scores", {}).get("autoencoder", {}).get("model_used", "")
     if model and model not in ("global", "unknown", "", None):
         return model
-
-    hname = host.get("name")
-    if hname and hname not in ("", None):
-        return hname
 
     return "unknown"
 
@@ -1622,6 +1660,250 @@ def ai_analyze():
         return jsonify({"ok": False, "error": str(e), "source": "fallback"})
 
 
+# ── Live threat map (firewall geoIP) ─────────────────────────────────────────
+# Tail recent FIREWALL events from the enriched feed, geolocate each external
+# source IP via a local MaxMind GeoLite2 DB, and serve source→DC arcs. All
+# offline — no external geo API. Degrades to empty if the DB/lib is missing.
+import ipaddress
+
+try:
+    import geoip2.database as _geoip2_db  # type: ignore
+except Exception:
+    _geoip2_db = None
+
+# Known on-disk locations for the GeoLite2 DBs (first existing one wins).
+_GEOIP_CITY_CANDIDATES = [
+    "/root/NEW_DRIVE/aditya_ueba/databases/GeoLite2-City.mmdb",
+    "/data/CyberSentinel-Event-Correlation/databases/GeoLite2-City.mmdb",
+    "/usr/share/GeoIP/GeoLite2-City.mmdb",
+    "/var/lib/GeoIP/GeoLite2-City.mmdb",
+]
+_GEOIP_ASN_CANDIDATES = [
+    "/root/NEW_DRIVE/aditya_ueba/databases/GeoLite2-ASN.mmdb",
+    "/data/CyberSentinel-Event-Correlation/databases/GeoLite2-ASN.mmdb",
+    "/usr/share/GeoIP/GeoLite2-ASN.mmdb",
+    "/var/lib/GeoIP/GeoLite2-ASN.mmdb",
+]
+
+_geo_city_reader = None
+_geo_asn_reader  = None
+_geo_readers_tried = False
+_geo_cache: dict = {}        # ip -> geo dict | None  (None = un-geolocatable, cached too)
+_geo_cache_lock = __import__("threading").Lock()
+_dc_loc: dict | None = None
+
+
+def _first_existing(explicit: str, candidates: list) -> str | None:
+    if explicit and Path(explicit).is_file():
+        return explicit
+    for c in candidates:
+        if Path(c).is_file():
+            return c
+    return None
+
+
+def _open_geo_readers():
+    """Open the GeoLite2 City/ASN readers once (lazy). Safe if absent."""
+    global _geo_city_reader, _geo_asn_reader, _geo_readers_tried
+    if _geo_readers_tried:
+        return
+    _geo_readers_tried = True
+    if _geoip2_db is None:
+        print("[threatmap] geoip2 not installed — /api/geofeed will be empty")
+        return
+    city_path = _first_existing(str(CFG.get("geoip_city_db") or ""), _GEOIP_CITY_CANDIDATES)
+    asn_path  = _first_existing(str(CFG.get("geoip_asn_db") or ""),  _GEOIP_ASN_CANDIDATES)
+    if not city_path:
+        print("[threatmap] no GeoLite2-City.mmdb found — /api/geofeed will be empty")
+        return
+    try:
+        _geo_city_reader = _geoip2_db.Reader(city_path)
+        print(f"[threatmap] GeoLite2-City loaded from {city_path}")
+    except Exception as e:
+        print(f"[threatmap] failed to open City DB {city_path}: {e}")
+    if asn_path:
+        try:
+            _geo_asn_reader = _geoip2_db.Reader(asn_path)
+        except Exception as e:
+            print(f"[threatmap] failed to open ASN DB {asn_path}: {e}")
+
+
+def _is_public_ip(ip: str) -> bool:
+    try:
+        o = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return not (o.is_private or o.is_loopback or o.is_reserved
+                or o.is_link_local or o.is_multicast or o.is_unspecified)
+
+
+def _geo_lookup(ip: str) -> dict | None:
+    """Lat/lng/country/city/asn for a public IP, cached. None if not resolvable."""
+    if ip in _geo_cache:
+        return _geo_cache[ip]
+    result = None
+    if _geo_city_reader is not None:
+        try:
+            c = _geo_city_reader.city(ip)
+            if c.location.latitude is not None and c.location.longitude is not None:
+                result = {
+                    "lat": round(c.location.latitude, 4),
+                    "lng": round(c.location.longitude, 4),
+                    "country": c.country.iso_code or "??",
+                    "country_name": c.country.name or "Unknown",
+                    "city": c.city.name or "",
+                }
+                if _geo_asn_reader is not None:
+                    try:
+                        a = _geo_asn_reader.asn(ip)
+                        result["asn"] = a.autonomous_system_number
+                        result["org"] = a.autonomous_system_organization or ""
+                    except Exception:
+                        pass
+        except Exception:
+            result = None
+    with _geo_cache_lock:
+        if len(_geo_cache) > 50000:        # bound the cache
+            _geo_cache.clear()
+        _geo_cache[ip] = result
+    return result
+
+
+def _resolve_dc() -> dict:
+    """The arc target: geolocate the configured DC/WAN IP once, else fall back
+    to the configured DC coords."""
+    global _dc_loc
+    if _dc_loc is not None:
+        return _dc_loc
+    tm = CFG.get("threatmap") or {}
+    dc_ip = str(tm.get("dc_ip") or "")
+    loc = _geo_lookup(dc_ip) if dc_ip and _is_public_ip(dc_ip) else None
+    if loc:
+        _dc_loc = {"lat": loc["lat"], "lng": loc["lng"],
+                   "country": loc.get("country", "IN"),
+                   "label": tm.get("dc_label", "Datacenter")}
+    else:
+        _dc_loc = {"lat": float(tm.get("dc_lat", 21.1463)),
+                   "lng": float(tm.get("dc_lng", 79.0849)),
+                   "country": "IN", "label": tm.get("dc_label", "Datacenter")}
+    return _dc_loc
+
+
+def _is_firewall_event(e: dict) -> bool:
+    h = e.get("host") or {}
+    if h.get("type") == "firewall":
+        return True
+    if str((h.get("os") or {}).get("name") or "").lower() == "fortios":
+        return True
+    return "fortigate" in str((e.get("context") or {}).get("source") or "").lower()
+
+
+# Outcome/signature → severity bucket for arc colour on the globe.
+def _threat_weight(e: dict) -> str:
+    outcome = str(e.get("event_outcome") or "").lower()
+    sig = str((e.get("security") or {}).get("signature") or "").lower()
+    if "fail" in outcome or "fail" in sig or "block" in sig or "denied" in sig:
+        return "high"
+    if "vpn" in sig or "passed" in sig:
+        return "low"
+    return "med"
+
+
+def _tail_firewall_geo(window_bytes: int, max_arcs: int) -> dict:
+    """Read the tail of enriched.jsonl, keep firewall events with a public source
+    IP, geolocate them, and build source→DC arcs (newest last) plus aggregates."""
+    _open_geo_readers()
+    dc = _resolve_dc()
+    geo_ok = _geo_city_reader is not None
+    path = Path(str(CFG.get("enriched_file") or "/root/NEW_DRIVE/aditya_ueba/enriched.jsonl"))
+    arcs: list = []
+    by_country: dict = {}
+    by_sig: dict = {}
+    seen_ips: set = set()
+    scanned = 0
+    if geo_ok and path.is_file():
+        try:
+            size = path.stat().st_size
+            with open(path, "rb") as f:
+                f.seek(max(0, size - window_bytes))
+                blob = f.read()
+            lines = blob.split(b"\n")
+            if size > window_bytes and lines:
+                lines = lines[1:]          # drop the partial first line
+            for raw in lines:
+                if not raw.strip():
+                    continue
+                try:
+                    e = json.loads(raw)
+                except Exception:
+                    continue
+                if not _is_firewall_event(e):
+                    continue
+                scanned += 1
+                sip = (e.get("subject") or {}).get("ip")
+                if not sip or not _is_public_ip(str(sip)):
+                    continue
+                g = _geo_lookup(str(sip))
+                if not g:
+                    continue
+                weight = _threat_weight(e)
+                sig = str((e.get("security") or {}).get("signature") or "Firewall event")
+                arcs.append({
+                    "srcLat": g["lat"], "srcLng": g["lng"],
+                    "country": g["country"], "country_name": g.get("country_name", ""),
+                    "city": g.get("city", ""), "ip": str(sip),
+                    "org": g.get("org", ""), "asn": g.get("asn"),
+                    "sig": sig, "weight": weight,
+                    "outcome": str(e.get("event_outcome") or ""),
+                    "time": e.get("event_time") or e.get("ingest_time"),
+                })
+                seen_ips.add(str(sip))
+                cc = g["country"]
+                bc = by_country.setdefault(cc, {"country": cc,
+                        "country_name": g.get("country_name", ""), "count": 0})
+                bc["count"] += 1
+                by_sig[sig] = by_sig.get(sig, 0) + 1
+        except Exception as e:
+            print(f"[threatmap] tail read failed: {e}")
+
+    if len(arcs) > max_arcs:
+        arcs = arcs[-max_arcs:]            # keep newest
+
+    top_countries = sorted(by_country.values(), key=lambda x: -x["count"])[:12]
+    top_sigs = sorted(({"sig": s, "count": c} for s, c in by_sig.items()),
+                      key=lambda x: -x["count"])[:8]
+    return {
+        "geo_ok": geo_ok,
+        "dc": dc,
+        "arcs": arcs,
+        "stats": {
+            "events": scanned,
+            "mapped": len(arcs),
+            "unique_ips": len(seen_ips),
+            "countries": len(by_country),
+            "top_countries": top_countries,
+            "top_signatures": top_sigs,
+        },
+    }
+
+
+@app.route("/api/geofeed")
+def geofeed():
+    """Live firewall-attack map feed: geolocated source→DC arcs for the globe."""
+    tm = CFG.get("threatmap") or {}
+    try:
+        window = int(request.args.get("bytes") or tm.get("window_bytes", 12582912))
+    except (TypeError, ValueError):
+        window = int(tm.get("window_bytes", 12582912))
+    window = max(256 * 1024, min(window, 64 * 1024 * 1024))   # clamp 256KB–64MB
+    try:
+        max_arcs = int(request.args.get("max") or tm.get("max_arcs", 400))
+    except (TypeError, ValueError):
+        max_arcs = int(tm.get("max_arcs", 400))
+    max_arcs = max(10, min(max_arcs, 2000))
+    return jsonify(_tail_firewall_geo(window, max_arcs))
+
+
 # ── Static + index ───────────────────────────────────────────────────────────
 def _serve_index():
     """Serve dashboard/dist/index.html if it exists, otherwise the legacy file."""
@@ -1655,7 +1937,8 @@ def legacy_index():
 #   2. Otherwise, if the first path segment is a known tab name, return
 #      index.html so the client router can activate the right tab.
 #   3. Otherwise, 404.
-SPA_TAB_PATHS = {"overview", "feed", "users", "campaigns", "endpoints", "false-positives"}
+SPA_TAB_PATHS = {"overview", "feed", "users", "campaigns", "endpoints",
+                 "false-positives", "threatmap"}
 
 @app.route("/<path:subpath>")
 def spa_fallback(subpath):
