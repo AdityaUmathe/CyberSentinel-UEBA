@@ -1798,15 +1798,37 @@ def _is_firewall_event(e: dict) -> bool:
     return "fortigate" in str((e.get("context") or {}).get("source") or "").lower()
 
 
-# Outcome/signature → severity bucket for arc colour on the globe.
-def _threat_weight(e: dict) -> str:
-    outcome = str(e.get("event_outcome") or "").lower()
-    sig = str((e.get("security") or {}).get("signature") or "").lower()
-    if "fail" in outcome or "fail" in sig or "block" in sig or "denied" in sig:
-        return "high"
-    if "vpn" in sig or "passed" in sig:
-        return "low"
-    return "med"
+# Classify a firewall event into a traffic category + arc direction, and pick the
+# EXTERNAL endpoint to geolocate. Categories mirror the analyst legend:
+#   incoming_threat  (red)    – external → DC, blocked/failed/attack
+#   normal_incoming  (blue)   – external → DC, allowed/successful
+#   outgoing         (green)  – DC → external, our server reaching out
+#   external_conn    (yellow) – VPN / session connections (external → DC)
+# arc_dir is "in" (external→DC) or "out" (DC→external) and drives the on-globe
+# flow direction so the analyst can see which way the traffic moves.
+def _classify_firewall(e: dict):
+    net      = e.get("network") or {}
+    direction = str(net.get("direction") or "").lower()
+    outcome  = str(e.get("event_outcome") or "").lower()
+    sig      = str((e.get("security") or {}).get("signature") or "").lower()
+    sub_ip   = str((e.get("subject") or {}).get("ip") or "")
+    obj_ip   = str((e.get("object") or {}).get("ip") or "")
+
+    failed = ("fail" in outcome or "fail" in sig or "block" in sig or "denied" in sig
+              or "deny" in sig or "attack" in sig or "drop" in sig or "invalid" in sig)
+    is_vpn = "vpn" in sig
+
+    if direction == "outgoing":
+        ext = obj_ip if _is_public_ip(obj_ip) else sub_ip
+        return ("outgoing", "out", ext)
+
+    # incoming / internal / none / unknown — the external party is the source side
+    ext = sub_ip if _is_public_ip(sub_ip) else obj_ip
+    if is_vpn and not failed:
+        return ("external_conn", "in", ext)
+    if failed:
+        return ("incoming_threat", "in", ext)
+    return ("normal_incoming", "in", ext)
 
 
 def _tail_firewall_geo(window_bytes: int, max_arcs: int) -> dict:
@@ -1819,6 +1841,8 @@ def _tail_firewall_geo(window_bytes: int, max_arcs: int) -> dict:
     arcs: list = []
     by_country: dict = {}
     by_sig: dict = {}
+    by_category: dict = {"incoming_threat": 0, "normal_incoming": 0,
+                         "outgoing": 0, "external_conn": 0}
     seen_ips: set = set()
     scanned = 0
     if geo_ok and path.is_file():
@@ -1840,24 +1864,25 @@ def _tail_firewall_geo(window_bytes: int, max_arcs: int) -> dict:
                 if not _is_firewall_event(e):
                     continue
                 scanned += 1
-                sip = (e.get("subject") or {}).get("ip")
-                if not sip or not _is_public_ip(str(sip)):
+                category, arc_dir, ext_ip = _classify_firewall(e)
+                if not ext_ip or not _is_public_ip(str(ext_ip)):
                     continue
-                g = _geo_lookup(str(sip))
+                g = _geo_lookup(str(ext_ip))
                 if not g:
                     continue
-                weight = _threat_weight(e)
                 sig = str((e.get("security") or {}).get("signature") or "Firewall event")
                 arcs.append({
                     "srcLat": g["lat"], "srcLng": g["lng"],
+                    "direction": arc_dir, "category": category,
                     "country": g["country"], "country_name": g.get("country_name", ""),
-                    "city": g.get("city", ""), "ip": str(sip),
+                    "city": g.get("city", ""), "ip": str(ext_ip),
                     "org": g.get("org", ""), "asn": g.get("asn"),
-                    "sig": sig, "weight": weight,
+                    "sig": sig,
                     "outcome": str(e.get("event_outcome") or ""),
                     "time": e.get("event_time") or e.get("ingest_time"),
                 })
-                seen_ips.add(str(sip))
+                seen_ips.add(str(ext_ip))
+                by_category[category] = by_category.get(category, 0) + 1
                 cc = g["country"]
                 bc = by_country.setdefault(cc, {"country": cc,
                         "country_name": g.get("country_name", ""), "count": 0})
@@ -1881,6 +1906,7 @@ def _tail_firewall_geo(window_bytes: int, max_arcs: int) -> dict:
             "mapped": len(arcs),
             "unique_ips": len(seen_ips),
             "countries": len(by_country),
+            "categories": by_category,
             "top_countries": top_countries,
             "top_signatures": top_sigs,
         },
