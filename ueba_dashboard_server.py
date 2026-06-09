@@ -1506,6 +1506,22 @@ def health():
     # "Engine live" = at least one alert within the last 5 minutes.
     engine_live = bool(newest_dt and (now - newest_dt).total_seconds() < 300)
 
+    # Feed liveness — is the engine's INPUT (enriched.jsonl) still growing? This
+    # is the true "is the 222→98 feed alive" signal, INDEPENDENT of whether any
+    # alert fired: a quiet period legitimately produces no alerts but the feed is
+    # still healthy. The stale-feed banner keys on this, not on alert recency.
+    feed_mtime_iso = None
+    feed_age_secs  = None
+    try:
+        ep = Path(str(CFG.get("enriched_file") or "/root/NEW_DRIVE/aditya_ueba/enriched.jsonl"))
+        if ep.exists():
+            feed_dt = datetime.fromtimestamp(ep.stat().st_mtime, timezone.utc)
+            feed_mtime_iso = feed_dt.isoformat()
+            feed_age_secs  = int((now - feed_dt).total_seconds())
+    except Exception:
+        pass
+    feed_live = feed_age_secs is not None and feed_age_secs < 180
+
     with _agent_sync_lock:
         agent_sync_status = {
             "enabled":    bool((CFG.get("agent_sync") or {}).get("enabled")),
@@ -1524,6 +1540,9 @@ def health():
         "server_started_at":      _SERVER_STARTED_AT,
         "uptime_secs":            uptime,
         "engine_live":            engine_live,
+        "feed_mtime":             feed_mtime_iso,
+        "feed_age_secs":          feed_age_secs,
+        "feed_live":              feed_live,
         "agent_sync":             agent_sync_status,
     })
 

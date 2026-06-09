@@ -5,14 +5,16 @@
 // the dashboard keeps looking healthy — it just shows stale data. Operators
 // only ever caught it by manually eyeballing the newest timestamp each morning.
 //
-// This banner makes a frozen feed impossible to miss. It watches the newest
-// alert's age — reported window-independently by /api/health.newest_alert_time,
-// so it's correct no matter which time window the user has selected — and warns
-// when the feed stalls, escalating to a red "DOWN" state. It piggybacks on the
-// existing 60s health poll (renderHealth), so it adds no extra network traffic.
+// This banner makes a frozen feed impossible to miss. It keys on FEED liveness —
+// whether the engine's input (enriched.jsonl) is still growing, reported by
+// /api/health.feed_age_secs — NOT on alert recency. A quiet period with no new
+// alerts is normal (the engine may legitimately find nothing anomalous for a
+// while) and must NOT raise a "feed down" alarm; only an actually-frozen feed
+// (the 222→98 tunnel/bridge dying) should. It piggybacks on the existing 60s
+// health poll (renderHealth), so it adds no extra network traffic.
 
-const WARN_MIN = 15;   // newest alert older than this → amber "stalling"
-const DOWN_MIN = 60;   // …older than this → red "appears down"
+const WARN_MIN = 5;    // feed hasn't grown in this long → amber "stalling"
+const DOWN_MIN = 15;   // …no growth this long → red "appears down"
 
 function _fmtAge(mins) {
   if (mins < 60) return `${Math.round(mins)} min`;
@@ -24,29 +26,24 @@ function _fmtAge(mins) {
 }
 
 // Drive the banner from a /api/health payload. Hidden whenever the feed is
-// fresh (or the timestamp is missing/unparseable — we don't cry wolf on a
-// momentarily empty payload).
+// growing normally (or the field is missing — we don't cry wolf on a momentarily
+// incomplete payload).
 export function updateFeedStaleBanner(health) {
   const el = document.getElementById("feed-stale-banner");
   if (!el) return;
 
-  const iso = health && health.newest_alert_time;
-  if (!iso) {
+  // feed_age_secs = how long since enriched.jsonl last grew. This is the real
+  // feed-health signal; alert recency is NOT used (no alerts ≠ feed down).
+  const ageSec = health && typeof health.feed_age_secs === "number"
+    ? health.feed_age_secs : null;
+  if (ageSec == null) {
     el.hidden = true;
+    el.classList.remove("warn", "down");
     return;
   }
 
-  let ageMin;
-  try {
-    // processed_at carries a UTC offset; Date.now() is UTC ms — the diff is
-    // timezone-correct regardless of the browser's local zone.
-    ageMin = (Date.now() - new Date(iso).getTime()) / 60000;
-  } catch {
-    el.hidden = true;
-    return;
-  }
-
-  if (!(ageMin >= WARN_MIN)) {
+  const ageMin = ageSec / 60;
+  if (ageMin < WARN_MIN) {
     el.hidden = true;
     el.classList.remove("warn", "down");
     return;
@@ -55,11 +52,9 @@ export function updateFeedStaleBanner(health) {
   const down = ageMin >= DOWN_MIN;
   el.classList.toggle("down", down);
   el.classList.toggle("warn", !down);
-  const when = new Date(iso).toLocaleTimeString("en-IN");
   el.innerHTML = down
-    ? `⚠ FEED APPEARS DOWN — no new alerts for <strong>${_fmtAge(ageMin)}</strong> ` +
-      `(last at ${when}). Check the 222→98 feed tunnel.`
-    : `⚠ Feed may be stalling — newest alert is <strong>${_fmtAge(ageMin)}</strong> ` +
-      `old (last at ${when}).`;
+    ? `⚠ FEED APPEARS DOWN — no new events for <strong>${_fmtAge(ageMin)}</strong>. ` +
+      `Check the 222→98 feed tunnel/bridge.`
+    : `⚠ Feed may be stalling — no new events for <strong>${_fmtAge(ageMin)}</strong>.`;
   el.hidden = false;
 }
