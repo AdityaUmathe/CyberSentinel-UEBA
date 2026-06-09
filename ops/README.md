@@ -46,6 +46,9 @@ enricher → enriched_*.jsonl[.gz]
 | `sshd/10-ueba-maxstartups.conf` | `/etc/ssh/sshd_config.d/` | Raise `MaxStartups` so an SSH brute-force flood can't starve the tunnel. `sshd -t && systemctl reload ssh`. |
 | `fail2ban/jail.local` | `/etc/fail2ban/jail.local` | Ban SSH brute-forcers at the local nftables firewall. Fill in `ignoreip`. `systemctl restart fail2ban`. |
 | `crontab.example` | `crontab -e` | The two UEBA cron lines (daily rotate, weekly retrain). |
+| `systemd/ueba-engine.service` | `/etc/systemd/system/` | Run the engine under systemd so it auto-starts on boot + auto-restarts on crash. `systemctl daemon-reload && systemctl enable --now ueba-engine`. |
+| `systemd/ueba-dashboard.service` | `/etc/systemd/system/` | Same for the dashboard server (`:3026`). `systemctl enable --now ueba-dashboard`. |
+| `systemd/ueba-bridge.service` | `/etc/systemd/system/` | Same for the feed bridge (`ueba_sync_bridge.sh`) — without this a reboot silently freezes the feed. `systemctl enable --now ueba-bridge`. |
 
 ### `222-soc/` — the SOC host
 | File | Deploy to | Purpose |
@@ -73,6 +76,13 @@ tail -f /root/NEW_DRIVE/aditya_ueba/logs/sync_bridge.log
 The dashboard now also shows a **stale-feed banner** automatically when the
 newest alert ages past 15m (amber) / 60m (red), so a frozen feed is visible
 without manual checking.
+
+**If the dashboard is fully unreachable (not just empty) after a 98 reboot:**
+the engine + dashboard run under systemd (`ueba-engine`, `ueba-dashboard`) and
+auto-start on boot. Check `systemctl status ueba-engine ueba-dashboard`; if they
+were started manually before these units existed, install them from
+`98-engine/systemd/`. Confirm boot freshness with `uptime` — a recent boot that
+matches the feed-freeze time means a reboot took out manually-launched processes.
 
 ### Gotchas
 - **autossh needs `-i /root/.ssh/id_tunnel`** — root's default keys are absent on

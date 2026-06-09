@@ -54,21 +54,38 @@ else
 fi
 
 # ── 1. Stop engine so file mutations are safe (engine holds these open) ──
-ENGINE_PID=$(pgrep -f "python3 ueba_engine\.py" | head -1 || true)
-if [ -n "$ENGINE_PID" ]; then
-  echo "  stopping engine PID=$ENGINE_PID"
-  kill "$ENGINE_PID" 2>/dev/null || true
-  for i in $(seq 1 25); do
-    sleep 1
-    kill -0 "$ENGINE_PID" 2>/dev/null || { echo "  engine exited after ${i}s"; break; }
-  done
-  if kill -0 "$ENGINE_PID" 2>/dev/null; then
-    echo "  engine didn't exit in 25s — SIGKILL"
-    kill -9 "$ENGINE_PID" || true
-    sleep 1
-  fi
+# The engine runs under systemd (ueba-engine.service). Stop it THROUGH systemd:
+# a clean `systemctl stop` does NOT trip Restart=always, so systemd won't respawn
+# the engine mid-rotation, and we avoid spawning a cron-owned engine that races
+# the unit-managed one on the same .state/ueba.state byte offset (the duplicate
+# bug). Falls back to the legacy pgrep-kill only where the unit isn't installed.
+ENGINE_UNIT=ueba-engine
+if systemctl cat "${ENGINE_UNIT}.service" >/dev/null 2>&1; then
+  USE_SYSTEMD=1
 else
-  echo "  no running engine (skipping stop)"
+  USE_SYSTEMD=0
+fi
+
+if [ "$USE_SYSTEMD" = 1 ]; then
+  echo "  stopping engine via 'systemctl stop ${ENGINE_UNIT}'"
+  systemctl stop "${ENGINE_UNIT}" || echo "  WARNING: systemctl stop returned non-zero"
+else
+  ENGINE_PID=$(pgrep -f "python3 ueba_engine\.py" | head -1 || true)
+  if [ -n "$ENGINE_PID" ]; then
+    echo "  stopping engine PID=$ENGINE_PID"
+    kill "$ENGINE_PID" 2>/dev/null || true
+    for i in $(seq 1 25); do
+      sleep 1
+      kill -0 "$ENGINE_PID" 2>/dev/null || { echo "  engine exited after ${i}s"; break; }
+    done
+    if kill -0 "$ENGINE_PID" 2>/dev/null; then
+      echo "  engine didn't exit in 25s — SIGKILL"
+      kill -9 "$ENGINE_PID" || true
+      sleep 1
+    fi
+  else
+    echo "  no running engine (skipping stop)"
+  fi
 fi
 
 # ── 2. Archive ueba_alerts.jsonl (if non-empty) ──────────────────────────
@@ -144,10 +161,17 @@ fi
 
 # ── 4. Restart engine so it reopens the alerts file (and the truncated
 #       enriched.jsonl, if it was flushed) ──────────────────────────────────
-cd "$BASE"
-setsid "$VENV_PY" ueba_engine.py >> engine.log 2>&1 < /dev/null &
-NEW_PID=$!
-echo "  engine restart launched (new PID: $NEW_PID, takes ~35s to be fully ready)"
+if [ "$USE_SYSTEMD" = 1 ]; then
+  echo "  starting engine via 'systemctl start ${ENGINE_UNIT}'"
+  systemctl start "${ENGINE_UNIT}"
+  NEW_PID=$(systemctl show -p MainPID --value "${ENGINE_UNIT}" 2>/dev/null || echo "?")
+  echo "  engine restart launched (systemd MainPID: ${NEW_PID}, takes ~35s to be fully ready)"
+else
+  cd "$BASE"
+  setsid "$VENV_PY" ueba_engine.py >> engine.log 2>&1 < /dev/null &
+  NEW_PID=$!
+  echo "  engine restart launched (new PID: $NEW_PID, takes ~35s to be fully ready)"
+fi
 
 # ── 5. Cleanup archived alert zips older than ARCHIVE_RETENTION_DAYS ─────
 # Uses file mtime — created/copied with mv+zip above, so the timestamp
