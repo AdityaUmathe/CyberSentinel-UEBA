@@ -6,14 +6,20 @@
 
 // Restore the last-used timeline window (24/72/168/720/1440/2160/0=All) from a
 // previous visit so a browser refresh stays on the same window instead of
-// snapping back to "All". Persisted by the timeline buttons in ui/tabs.js.
+// snapping back to the default. Persisted by the timeline buttons in ui/tabs.js.
+//
+// Default is 24h, NOT All-time: on All-time /api/feed serializes+ships every
+// in-history row (tens of MB / several seconds) and the client re-aggregates it
+// all, so a fresh visit appeared to "hang" on LOADING. 24h is ~1.5MB/0.6s. An
+// explicit "All" the analyst picked is still honored (0 is in the allow-list).
 const TIMELINE_ALLOWED = [0, 24, 72, 168, 720, 1440, 2160];
+const TIMELINE_DEFAULT = 24;
 function restoreTimelineHours() {
   try {
     const v = parseInt(localStorage.getItem("cs-timeline-hours"), 10);
-    return TIMELINE_ALLOWED.includes(v) ? v : 0;
+    return TIMELINE_ALLOWED.includes(v) ? v : TIMELINE_DEFAULT;
   } catch {
-    return 0;
+    return TIMELINE_DEFAULT;
   }
 }
 

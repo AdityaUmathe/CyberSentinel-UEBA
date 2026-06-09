@@ -22,6 +22,7 @@ a locally-generated summary.
 """
 
 import argparse
+import gzip
 import json
 import os
 import re
@@ -144,6 +145,43 @@ DASHBOARD_LEGACY  = DASHBOARD_DIR / "index.html"
 
 app = Flask(__name__, static_folder=None)
 CORS(app)
+
+# ── Response gzip ──
+# The feed/charts are rendered entirely client-side from raw /api/feed rows, so a
+# wide window ships tens of MB of highly-repetitive JSON. gzip cuts that ~10x on
+# the wire (28MB → ~3MB) with no behaviour change. Stdlib only (no flask-compress
+# dependency); kicks in only when the client advertises gzip and the body is big
+# enough to be worth it, and never double-encodes a streamed/already-encoded body.
+_GZIP_MIN_BYTES = 1024
+
+
+@app.after_request
+def _gzip_response(resp: "Response") -> "Response":
+    try:
+        accept = (request.headers.get("Accept-Encoding") or "")
+        if "gzip" not in accept.lower():
+            return resp
+        # Skip streamed bodies (e.g. /api/stream SSE) and anything already encoded.
+        if resp.direct_passthrough or resp.headers.get("Content-Encoding"):
+            return resp
+        ctype = (resp.content_type or "")
+        if not (ctype.startswith("application/json") or ctype.startswith("text/")):
+            return resp
+        data = resp.get_data()
+        if len(data) < _GZIP_MIN_BYTES:
+            return resp
+        resp.set_data(gzip.compress(data, 6))
+        resp.headers["Content-Encoding"] = "gzip"
+        resp.headers["Content-Length"] = str(len(resp.get_data()))
+        vary = resp.headers.get("Vary")
+        if not vary:
+            resp.headers["Vary"] = "Accept-Encoding"
+        elif "accept-encoding" not in vary.lower():
+            resp.headers["Vary"] = vary + ", Accept-Encoding"
+    except Exception:
+        # Compression is a best-effort optimisation — never break a response over it.
+        return resp
+    return resp
 
 CFG: dict = dict(_DEFAULTS)
 CFG["ai_analyst"] = dict(_DEFAULTS["ai_analyst"])
