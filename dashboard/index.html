@@ -611,11 +611,17 @@
     <div class="tm-wrap">
       <div class="tm-globe-col">
         <div id="threatmap-globe" class="tm-globe"></div>
-        <div class="tm-legend">
-          <span class="tm-lg tm-lg-high"><i></i>Failed / Blocked</span>
-          <span class="tm-lg tm-lg-med"><i></i>Firewall activity</span>
-          <span class="tm-lg tm-lg-low"><i></i>VPN / Passed</span>
-          <span class="tm-lg tm-lg-dc"><i></i>Datacenter</span>
+        <div id="tm-tooltip" class="tm-tooltip"></div>
+        <div class="tm-filters">
+          <button class="tm-filt tm-cat-outgoing" data-cat="outgoing" title="Traffic leaving the server (DC → external)">
+            <i></i>Outgoing from server <b id="tmf-outgoing">0</b></button>
+          <button class="tm-filt tm-cat-incoming_threat" data-cat="incoming_threat" title="Blocked / failed inbound attacks (external → DC)">
+            <i></i>Incoming threat <b id="tmf-incoming_threat">0</b></button>
+          <button class="tm-filt tm-cat-normal_incoming" data-cat="normal_incoming" title="Allowed inbound traffic (external → DC)">
+            <i></i>Normal incoming <b id="tmf-normal_incoming">0</b></button>
+          <button class="tm-filt tm-cat-external_conn" data-cat="external_conn" title="VPN / session connections">
+            <i></i>External connection <b id="tmf-external_conn">0</b></button>
+          <span class="tm-filt-dc"><i></i>Datacenter</span>
         </div>
         <div id="tm-offline" class="tm-offline">
           <div class="tm-offline-box">

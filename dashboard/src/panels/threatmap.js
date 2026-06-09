@@ -16,12 +16,22 @@ const MAX_POINTS     = 90;     // rolling attacker-point budget
 const ARC_FLY_MS     = 2200;   // arc dash travel time (source → DC)
 
 // Severity → colour. Matches the dashboard palette (red / orange / cyan).
-const WEIGHT_COLOR = {
-  high: "#ff3b5c",   // failed login / blocked / denied  → attack
-  med:  "#ffa94d",   // other firewall activity
-  low:  "#27d3ff",   // vpn / passed / informational
+// Traffic categories — colour + label + arc flow direction. Mirrors the analyst
+// legend / filter chips. "in" = external → DC, "out" = DC → external.
+const CATEGORY = {
+  incoming_threat: { color: "#ff3b5c", label: "Incoming threat",       dir: "in"  },
+  normal_incoming: { color: "#3d7bff", label: "Normal incoming",       dir: "in"  },
+  outgoing:        { color: "#22c55e", label: "Outgoing from server",  dir: "out" },
+  external_conn:   { color: "#facc15", label: "External connection",   dir: "in"  },
 };
+const CATEGORY_ORDER = ["outgoing", "incoming_threat", "normal_incoming", "external_conn"];
+function catColor(cat) { return (CATEGORY[cat] || CATEGORY.normal_incoming).color; }
+function catLabel(cat) { return (CATEGORY[cat] || CATEGORY.normal_incoming).label; }
+
 const DC_COLOR = "#7CFFcb";
+
+// Active category filters (all on by default). Toggled by the legend/filter chips.
+const activeCats = new Set(CATEGORY_ORDER);
 
 // ── Module state ──────────────────────────────────────────────────────────────
 let globe       = null;
@@ -38,6 +48,10 @@ const seenKeys  = new Set();   // dedupe across polls (ip|time|sig)
 let   seenOrder = [];          // FIFO for trimming seenKeys
 let   lastError = null;
 let   firstLoad = true;
+let   hoveredPoly  = null;     // country polygon currently under the cursor
+let   hoveredArc   = null;     // attack arc (alert) under the cursor
+let   hoveredPoint = null;     // attacker point (aggregated source IP) under the cursor
+const lastMouse = { x: 0, y: 0 };
 
 function el(id) { return document.getElementById(id); }
 
@@ -66,22 +80,27 @@ async function buildGlobe() {
     .showAtmosphere(true)
     .atmosphereColor("#2b6cff")
     .atmosphereAltitude(0.18)
-    // Arcs: attacker → datacenter, animated dash "tracer"
+    // Arcs: direction-aware. Outgoing flows DC → external; everything else
+    // flows external → DC. The dash animates start→end so the flow visibly
+    // shows which way the traffic is going. Colour = traffic category.
     .arcsData([])
-    .arcStartLat((d) => d.srcLat)
-    .arcStartLng((d) => d.srcLng)
-    .arcEndLat(() => dc.lat)
-    .arcEndLng(() => dc.lng)
+    .arcStartLat((d) => (d.direction === "out" ? dc.lat : d.srcLat))
+    .arcStartLng((d) => (d.direction === "out" ? dc.lng : d.srcLng))
+    .arcEndLat((d) => (d.direction === "out" ? d.srcLat : dc.lat))
+    .arcEndLng((d) => (d.direction === "out" ? d.srcLng : dc.lng))
     .arcColor((d) => {
-      const c = WEIGHT_COLOR[d.weight] || WEIGHT_COLOR.med;
-      return [c, DC_COLOR];
+      const c = catColor(d.category);
+      return [rgba(c, 0.12), c];   // faint tail → bright head (the destination)
     })
-    .arcStroke((d) => (d.weight === "high" ? 0.55 : 0.35))
+    // Stroke also defines the arc's tube radius = the hover hit-target, so it's
+    // kept a bit chunky to make the lines easy to hover.
+    .arcStroke((d) => (d.category === "incoming_threat" ? 0.7 : 0.6))
     .arcDashLength(0.45)
     .arcDashGap(1.4)
     .arcDashInitialGap(() => Math.random())
     .arcDashAnimateTime(ARC_FLY_MS)
     .arcAltitudeAutoScale(0.45)
+    .onArcHover((arc) => { hoveredArc = arc; refreshHover(); })
     // Glowing attacker points
     .pointsData([])
     .pointLat((d) => d.lat)
@@ -90,6 +109,7 @@ async function buildGlobe() {
     .pointAltitude(0.01)
     .pointRadius((d) => Math.min(0.8, 0.18 + Math.log2(1 + d.count) * 0.12))
     .pointsMerge(false)
+    .onPointHover((pt) => { hoveredPoint = pt; refreshHover(); })
     // Impact rings (DC pulse + transient source pings)
     .ringsData([])
     .ringLat((d) => d.lat)
@@ -100,7 +120,22 @@ async function buildGlobe() {
     })
     .ringMaxRadius((d) => d.maxR)
     .ringPropagationSpeed((d) => d.speed)
-    .ringRepeatPeriod((d) => d.period);
+    .ringRepeatPeriod((d) => d.period)
+    // Country polygons — invisible until hovered; drive the cursor tooltip.
+    .polygonsData([])
+    .polygonCapColor((d) => (d === hoveredPoly ? "rgba(0,212,255,0.22)" : "rgba(0,0,0,0)"))
+    .polygonSideColor(() => "rgba(0,0,0,0)")
+    .polygonStrokeColor((d) => (d === hoveredPoly ? "rgba(0,212,255,0.9)" : "rgba(0,0,0,0)"))
+    .polygonAltitude((d) => (d === hoveredPoly ? 0.014 : 0.006))
+    .onPolygonHover((poly) => {
+      hoveredPoly = poly;
+      // re-evaluate the polygon accessors so the highlight repaints
+      globe
+        .polygonCapColor((d) => (d === hoveredPoly ? "rgba(0,212,255,0.22)" : "rgba(0,0,0,0)"))
+        .polygonStrokeColor((d) => (d === hoveredPoly ? "rgba(0,212,255,0.9)" : "rgba(0,0,0,0)"))
+        .polygonAltitude((d) => (d === hoveredPoly ? 0.014 : 0.006));
+      refreshHover();
+    });
 
   // Camera + auto-rotate
   globe.pointOfView({ lat: 22, lng: 78, altitude: 2.4 }, 0);
@@ -109,10 +144,101 @@ async function buildGlobe() {
   controls.autoRotateSpeed = 0.45;
   controls.enableDamping = true;
 
+  // Load offline country polygons for hover detection (non-fatal if missing).
+  try {
+    const res = await fetch("/textures/countries-110m.geojson");
+    const gj = await res.json();
+    globe.polygonsData((gj && gj.features) || []);
+  } catch (e) {
+    lastError = "country polygons unavailable: " + (e.message || e);
+  }
+
+  // Cursor tracking for the hover tooltip.
+  const area = el("threatmap-globe");
+  if (area) {
+    area.addEventListener("mousemove", (e) => {
+      const r = area.getBoundingClientRect();
+      lastMouse.x = e.clientX - r.left;
+      lastMouse.y = e.clientY - r.top;
+      if (hoveredArc || hoveredPoint || hoveredPoly) positionTooltip();
+    });
+    area.addEventListener("mouseleave", () => {
+      hoveredPoly = hoveredArc = hoveredPoint = null;
+      refreshHover();
+    });
+  }
+
   sizeGlobe();
   window.addEventListener("resize", sizeGlobe);
   mounted = true;
   building = false;
+}
+
+// ── Hover tooltip (arcs = alerts, points = attacker IPs, polygons = country) ──
+// Follows the cursor. Precedence: attacker point > attack arc > country.
+function refreshHover() {
+  const tip = el("tm-tooltip");
+  if (!tip) return;
+  let html = null;
+  if (hoveredPoint)      html = pointTooltipHTML(hoveredPoint);
+  else if (hoveredArc)   html = arcTooltipHTML(hoveredArc);
+  else if (hoveredPoly)  html = `<div class="tmtt-title" style="color:var(--accent)">${esc((hoveredPoly.properties || {}).name || "Unknown")}</div>`;
+
+  if (!html) {
+    tip.classList.remove("show");
+  } else {
+    tip.innerHTML = html;
+    tip.classList.add("show");
+    positionTooltip();
+  }
+  // Pause auto-rotate while the analyst is inspecting anything.
+  if (globe) globe.controls().autoRotate = !(hoveredPoint || hoveredArc || hoveredPoly) && isActive();
+}
+
+function positionTooltip() {
+  const tip = el("tm-tooltip"); const area = el("threatmap-globe");
+  if (!tip || !area) return;
+  const pad = 14;
+  let x = lastMouse.x + 16, y = lastMouse.y + 16;
+  const tw = tip.offsetWidth, th = tip.offsetHeight;
+  if (x + tw + pad > area.clientWidth)  x = lastMouse.x - tw - 16;
+  if (y + th + pad > area.clientHeight) y = lastMouse.y - th - 16;
+  tip.style.left = Math.max(4, x) + "px";
+  tip.style.top  = Math.max(4, y) + "px";
+}
+
+function _row(label, value) {
+  if (!value && value !== 0) return "";
+  return `<div class="tmtt-row"><span>${esc(label)}</span><b>${esc(value)}</b></div>`;
+}
+
+function arcTooltipHTML(a) {
+  const color = catColor(a.category);
+  const loc = [a.country_name || a.country, a.city].filter(Boolean).join(" · ");
+  const net = [a.asn ? "AS" + a.asn : "", a.org].filter(Boolean).join(" ");
+  const when = [fmtTime(a.time), a.outcome].filter(Boolean).join(" · ");
+  const out = a.direction === "out";
+  const dirLabel = out ? `Outgoing — DC → ${esc(a.country_name || a.country || "external")}`
+                       : `Incoming — ${esc(a.country_name || a.country || "external")} → DC`;
+  return `<div class="tmtt-title" style="color:${color}">${flagEmoji(a.country)} ${esc(shortSig(a.sig)) || "Firewall event"}</div>`
+       + `<div class="tmtt-cat" style="color:${color}">${esc(catLabel(a.category))}</div>`
+       + `<div class="tmtt-row"><span>Direction</span><b style="color:${color}">${dirLabel}</b></div>`
+       + _row(out ? "Destination IP" : "Source IP", a.ip)
+       + _row("Location", loc)
+       + _row("Network", net)
+       + _row("When", when);
+}
+
+function pointTooltipHTML(p) {
+  const color = catColor(p.category);
+  const loc = [p.country_name || p.country, p.city].filter(Boolean).join(" · ");
+  const net = [p.asn ? "AS" + p.asn : "", p.org].filter(Boolean).join(" ");
+  return `<div class="tmtt-title" style="color:${color}">${flagEmoji(p.country)} ${esc(p.ip || "Endpoint")}</div>`
+       + `<div class="tmtt-cat" style="color:${color}">${esc(catLabel(p.category))}</div>`
+       + _row("Location", loc)
+       + _row("Network", net)
+       + _row("Events", (p.count || 1).toLocaleString())
+       + _row("Last hit", [shortSig(p.lastSig), fmtTime(p.lastTime)].filter(Boolean).join(" · "));
 }
 
 function sizeGlobe() {
@@ -158,11 +284,21 @@ function applyFeed(data) {
 
   for (const a of fresh) {
     arcs.push(a);
-    // attacker point (accumulate count per IP)
+    // external endpoint point (accumulate count per IP, carry details for hover)
     const p = points.get(a.ip);
-    const color = WEIGHT_COLOR[a.weight] || WEIGHT_COLOR.med;
-    if (p) { p.count += 1; p.ts = Date.now(); if (a.weight === "high") p.color = color; }
-    else   { points.set(a.ip, { lat: a.srcLat, lng: a.srcLng, color, count: 1, ts: Date.now() }); }
+    const color = catColor(a.category);
+    if (p) {
+      p.count += 1; p.ts = Date.now();
+      p.lastSig = a.sig; p.lastTime = a.time;
+      p.category = a.category; p.color = color;   // reflect most recent category
+    } else {
+      points.set(a.ip, {
+        lat: a.srcLat, lng: a.srcLng, color, count: 1, ts: Date.now(),
+        ip: a.ip, country: a.country, country_name: a.country_name,
+        city: a.city, org: a.org, asn: a.asn, category: a.category,
+        lastSig: a.sig, lastTime: a.time,
+      });
+    }
   }
   if (firstLoad && fresh.length) {
     // keep only the freshest slice visible at startup
@@ -178,29 +314,36 @@ function applyFeed(data) {
     for (let i = 0; i < points.size - MAX_POINTS; i++) points.delete(oldest[i][0]);
   }
 
-  // transient impact rings for the new attacks (source ping)
+  // transient impact rings for the new events (ping at the external endpoint),
+  // honouring the active category filters.
   for (const a of ringFor.slice(-12)) {
-    const rgb = hexToRgb(WEIGHT_COLOR[a.weight] || WEIGHT_COLOR.med);
-    rings.push({ lat: a.srcLat, lng: a.srcLng, rgb, maxR: 3, speed: 2.5, period: 1e9, born: Date.now() });
+    if (!activeCats.has(a.category)) continue;
+    rings.push({ lat: a.srcLat, lng: a.srcLng, rgb: hexToRgb(catColor(a.category)),
+                 maxR: 3, speed: 2.5, period: 1e9, born: Date.now() });
   }
-  // age out transient rings (~1.4s each)
+  // age out transient rings (~1.5s each)
   const now = Date.now();
   for (let i = rings.length - 1; i >= 0; i--) {
     if (rings[i].dc) continue;
     if (now - rings[i].born > 1500) rings.splice(i, 1);
   }
 
-  // persistent DC pulse ring (kept at index 0)
-  const dcRing = { lat: dc.lat, lng: dc.lng, rgb: "124,255,203", maxR: 5, speed: 3.2, period: 900, dc: true };
-  const ringData = [dcRing, ...rings];
-
-  // push to globe
-  globe.arcsData([...arcs]);
-  globe.pointsData([...points.values()]);
-  globe.ringsData(ringData);
-
+  paintGlobe();
   paintSidebar(data, fresh);
   firstLoad = false;
+}
+
+// Push the (filtered) arcs / points / rings to the globe. Called on each feed
+// and whenever a category filter is toggled.
+function paintGlobe() {
+  if (!globe) return;
+  const visArcs   = arcs.filter((a) => activeCats.has(a.category));
+  const visPoints = [...points.values()].filter((p) => activeCats.has(p.category));
+  const dcRing = { lat: dc.lat, lng: dc.lng, rgb: "124,255,203",
+                   maxR: 5, speed: 3.2, period: 900, dc: true };
+  globe.arcsData(visArcs);
+  globe.pointsData(visPoints);
+  globe.ringsData([dcRing, ...rings]);
 }
 
 // ── Sidebar / HUD ─────────────────────────────────────────────────────────────
@@ -233,18 +376,27 @@ function paintSidebar(data, fresh) {
     ).join("") || `<div class="tm-empty">—</div>`;
   }
 
-  // live ticker — prepend newest attacks
+  // category filter-chip counts
+  const cats = s.categories || {};
+  for (const c of CATEGORY_ORDER) setText("tmf-" + c, (cats[c] || 0).toLocaleString());
+
+  // live ticker — prepend newest events (respecting the active filters)
   const tk = el("tm-ticker");
-  if (tk && fresh.length) {
-    const items = fresh.slice(-8).reverse().map((a) => `
-      <div class="tm-tick tm-${a.weight}">
-        <span class="tm-dot"></span>
-        <span class="tm-tip">${esc(a.country_name || a.country)}${a.city ? " · " + esc(a.city) : ""}</span>
-        <span class="tm-tsig">${esc(shortSig(a.sig))}</span>
-        <span class="tm-tip2">${esc(a.ip)}</span>
-      </div>`).join("");
-    tk.insertAdjacentHTML("afterbegin", items);
-    while (tk.children.length > 40) tk.removeChild(tk.lastElementChild);
+  if (tk) {
+    const shown = fresh.filter((a) => activeCats.has(a.category));
+    if (shown.length) {
+      const items = shown.slice(-8).reverse().map((a) => {
+        const arrow = a.direction === "out" ? "↑" : "↓";
+        return `<div class="tm-tick">
+          <span class="tm-dot" style="background:${catColor(a.category)};color:${catColor(a.category)}"></span>
+          <span class="tm-tip">${arrow} ${esc(a.country_name || a.country)}${a.city ? " · " + esc(a.city) : ""}</span>
+          <span class="tm-tsig">${esc(shortSig(a.sig))}</span>
+          <span class="tm-tip2">${esc(a.ip)}</span>
+        </div>`;
+      }).join("");
+      tk.insertAdjacentHTML("afterbegin", items);
+      while (tk.children.length > 40) tk.removeChild(tk.lastElementChild);
+    }
   }
 }
 
@@ -290,9 +442,25 @@ function stop() {
   if (globe) globe.controls().autoRotate = false;   // save CPU when hidden
 }
 
+// ── Category filter chips (legend doubles as a filter) ───────────────────────
+function initFilters() {
+  document.querySelectorAll(".tm-filt").forEach((btn) => {
+    const cat = btn.dataset.cat;
+    btn.classList.toggle("off", !activeCats.has(cat));
+    btn.addEventListener("click", () => {
+      if (activeCats.has(cat)) activeCats.delete(cat);
+      else activeCats.add(cat);
+      btn.classList.toggle("off", !activeCats.has(cat));
+      paintGlobe();                 // re-render immediately, no refetch
+    });
+  });
+}
+
 export function initThreatMap() {
   const page = el("page-threatmap");
   if (!page) return;
+
+  initFilters();
 
   // React to this tab becoming active / inactive (works for clicks, URL, back/fwd).
   observer = new MutationObserver(() => { isActive() ? start() : stop(); });
@@ -308,11 +476,18 @@ export function initThreatMap() {
 function setText(id, v) { const e = el(id); if (e) e.textContent = v; }
 function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, (c) => (
   { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
-function shortSig(s) { return String(s || "").replace(/^Fortigate:\s*/i, "").slice(0, 38); }
+function shortSig(s) { return String(s || "").replace(/^Fortigate:\s*/i, "").slice(0, 42); }
+function fmtTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return "";
+  return d.toLocaleString([], { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+}
 function hexToRgb(hex) {
   const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || "");
   return m ? `${parseInt(m[1], 16)},${parseInt(m[2], 16)},${parseInt(m[3], 16)}` : "255,59,92";
 }
+function rgba(hex, a) { return `rgba(${hexToRgb(hex)},${a})`; }
 function flagEmoji(cc) {
   if (!cc || cc.length !== 2 || cc === "??") return "🏴";
   const A = 0x1f1e6;
