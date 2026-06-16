@@ -88,6 +88,23 @@ else
   fi
 fi
 
+# ── 1b. Reap strays started OUTSIDE systemd ──────────────────────────────
+# `systemctl stop` only kills the unit's own cgroup. An engine launched
+# outside systemd — a manual run, or this script's own legacy fallback below
+# — is invisible to it and would survive every rotation, racing the
+# unit-managed engine on the same .state/ueba.state byte offset and the same
+# ueba_alerts.jsonl. That race is exactly how a second engine ends up writing
+# into an unlinked (deleted) inode that the dashboard can't see. By this point
+# NO engine should be running, so SIGKILL any survivor (KILL not TERM so a
+# straggler can't flush a stale read offset on the way out).
+sleep 1
+STRAYS=$(pgrep -f "ueba_engine\.py" || true)
+if [ -n "$STRAYS" ]; then
+  echo "  WARNING: reaping non-systemd engine stray(s): $(echo "$STRAYS" | tr '\n' ' ')"
+  kill -9 $STRAYS 2>/dev/null || true
+  sleep 1
+fi
+
 # ── 2. Archive ueba_alerts.jsonl (if non-empty) ──────────────────────────
 if [ "$HAVE_ALERTS" = "1" ]; then
   DATED="ueba_alerts_${ROTATE_DATE}.jsonl"
