@@ -3,8 +3,6 @@
 // Backed by GET /api/health. Called from renderDashboard so it refreshes
 // alongside the rest of the Overview (every 60s polling cycle).
 
-import { updateFeedStaleBanner } from "../ui/feed-stale-banner.js";
-
 let _cache = null;
 
 function _fmtBytes(n) {
@@ -73,16 +71,12 @@ export async function renderHealth() {
   // Paint cached data immediately to avoid a spinner flash on every refresh.
   if (_cache) {
     _paint(_cache);
-    updateFeedStaleBanner(_cache);
   }
   try {
     const r = await fetch("/api/health");
     const h = await r.json();
     _cache = h;
     _paint(h);
-    // Global stale-feed banner rides the same payload — newest_alert_time is
-    // window-independent, so it's correct on every tab and time window.
-    updateFeedStaleBanner(h);
   } catch {
     // Keep the cached view if the fetch fails.
   }

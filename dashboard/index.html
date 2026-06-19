@@ -34,10 +34,6 @@
   </div>
 </header>
 
-<!-- Global stale-feed banner — shown by ui/feed-stale-banner.js when the newest
-     alert ages past the warn/down thresholds (i.e. the feed has frozen). -->
-<div id="feed-stale-banner" class="feed-stale-banner" role="alert" aria-live="polite" hidden></div>
-
 <nav>
   <div class="tab active" data-tab="overview">Overview</div>
   <div class="tab" data-tab="feed">Alert Feed</div>
@@ -610,7 +606,12 @@
   <div class="page" id="page-threatmap">
     <div class="tm-wrap">
       <div class="tm-globe-col">
+        <div class="tm-viewtoggle" role="group" aria-label="Map view">
+          <button class="tm-viewbtn active" data-view="3d" title="3D globe view">◍ 3D</button>
+          <button class="tm-viewbtn" data-view="2d" title="2D flat map view">▭ 2D</button>
+        </div>
         <div id="threatmap-globe" class="tm-globe"></div>
+        <div id="threatmap-flat" class="tm-flat"></div>
         <div id="tm-tooltip" class="tm-tooltip"></div>
         <div class="tm-filters">
           <button class="tm-filt tm-cat-outgoing" data-cat="outgoing" title="Traffic leaving the server (DC → external)">

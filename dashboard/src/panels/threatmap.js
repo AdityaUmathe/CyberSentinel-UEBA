@@ -9,11 +9,19 @@
 // and never weighs down the other tabs' initial load. The live poll only runs
 // while the tab is visible, so it costs nothing elsewhere.
 
+import { createFlatMap } from "./threatmap2d.js";
+import { subsolarPoint } from "./solar.js";
+
 // ── Tunables ──────────────────────────────────────────────────────────────────
 const POLL_MS        = 6000;   // how often to pull /api/geofeed while visible
-const MAX_ARCS       = 70;     // rolling on-screen arc budget (animated)
-const MAX_POINTS     = 90;     // rolling attacker-point budget
-const ARC_FLY_MS     = 2200;   // arc dash travel time (source → DC)
+const SUN_MS         = 30000;  // how often to advance the live day/night sun
+const MAX_ARCS       = 150;    // rolling on-screen arc budget (solid, persistent)
+const MAX_POINTS     = 120;    // rolling attacker-point budget
+// The feed is high-volume: a 12MB poll window is all-new events, so without a
+// cap the whole arc set churns out every poll. Ingest only the newest few per
+// poll so each arc lingers ~MAX_ARCS/INGEST polls (~1 min) before rolling off.
+const ARC_INGEST_PER_POLL = 24;
+const ARC_FLY_MS     = 2200;   // 2D flat-map comet travel time along each arc
 
 // Severity → colour. Matches the dashboard palette (red / orange / cyan).
 // Traffic categories — colour + label + arc flow direction. Mirrors the analyst
@@ -30,6 +38,45 @@ function catLabel(cat) { return (CATEGORY[cat] || CATEGORY.normal_incoming).labe
 
 const DC_COLOR = "#7CFFcb";
 
+// Day/night globe shader — blends a daytime (blue-marble) texture and a
+// night-lights texture per-fragment by the angle to the Sun. globeRotation
+// compensates for the globe's own (auto-)rotation so the terminator stays fixed
+// in geographic space. (Adapted from the globe.gl day/night example.)
+const DN_VERT = `
+  varying vec3 vNormal;
+  varying vec2 vUv;
+  void main() {
+    vNormal = normalize(normalMatrix * normal);
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }`;
+const DN_FRAG = `
+  #define PI 3.141592653589793
+  uniform sampler2D dayTexture;
+  uniform sampler2D nightTexture;
+  uniform vec2 sunPosition;
+  uniform vec2 globeRotation;
+  varying vec3 vNormal;
+  varying vec2 vUv;
+  float toRad(in float a) { return a * PI / 180.0; }
+  vec3 Polar2Cartesian(in vec2 c) {            // [lng, lat] -> unit vector
+    float theta = toRad(90.0 - c.x);
+    float phi = toRad(90.0 - c.y);
+    return vec3(sin(phi) * cos(theta), cos(phi), sin(phi) * sin(theta));
+  }
+  void main() {
+    float invLon = toRad(globeRotation.x);
+    float invLat = -toRad(globeRotation.y);
+    mat3 rotX = mat3(1, 0, 0, 0, cos(invLat), -sin(invLat), 0, sin(invLat), cos(invLat));
+    mat3 rotY = mat3(cos(invLon), 0, sin(invLon), 0, 1, 0, -sin(invLon), 0, cos(invLon));
+    vec3 sunDir = rotX * rotY * Polar2Cartesian(sunPosition);
+    float intensity = dot(normalize(vNormal), normalize(sunDir));
+    vec4 dayColor = texture2D(dayTexture, vUv);
+    vec4 nightColor = texture2D(nightTexture, vUv) * 1.1;   // lift city lights
+    float blend = smoothstep(-0.12, 0.12, intensity);       // soft terminator
+    gl_FragColor = mix(nightColor, dayColor, blend);
+  }`;
+
 // Active category filters (all on by default). Toggled by the legend/filter chips.
 const activeCats = new Set(CATEGORY_ORDER);
 
@@ -40,6 +87,13 @@ let building    = false;
 let pollTimer   = null;
 let observer    = null;
 let dc          = null;
+let flat        = null;        // 2D flat-map renderer (lazy)
+let polyFeatures = null;       // country polygons, shared by both renderers
+let dnMaterial  = null;        // day/night globe shader material
+let sunSprite   = null;        // glowing sun sprite in the 3D scene
+let sunTimer    = null;        // drives the live day/night advance
+let viewMode    = "3d";        // "3d" globe | "2d" flat map (restored below)
+try { if (localStorage.getItem("tm-view") === "2d") viewMode = "2d"; } catch (e) {}
 
 const arcs      = [];          // rolling display buffer
 const points    = new Map();   // ip -> { lat, lng, color, count, ts }
@@ -64,9 +118,10 @@ async function buildGlobe() {
   if (!host || globe || building) return;
   building = true;
 
-  let Globe;
+  let Globe, THREE;
   try {
     ({ default: Globe } = await import("globe.gl"));
+    THREE = await import("three");
   } catch (e) {
     building = false;
     lastError = "Failed to load globe library: " + (e.message || e);
@@ -76,7 +131,7 @@ async function buildGlobe() {
   globe = new Globe(host)
     .backgroundColor("#01030a")
     .backgroundImageUrl("/textures/night-sky.png")
-    .globeImageUrl("/textures/earth-night.jpg")
+    .globeImageUrl("/textures/earth-day.jpg")
     .showAtmosphere(true)
     .atmosphereColor("#2b6cff")
     .atmosphereAltitude(0.18)
@@ -94,11 +149,11 @@ async function buildGlobe() {
     })
     // Stroke also defines the arc's tube radius = the hover hit-target, so it's
     // kept a bit chunky to make the lines easy to hover.
-    .arcStroke((d) => (d.category === "incoming_threat" ? 0.7 : 0.6))
-    .arcDashLength(0.45)
-    .arcDashGap(1.4)
-    .arcDashInitialGap(() => Math.random())
-    .arcDashAnimateTime(ARC_FLY_MS)
+    .arcStroke((d) => (d.category === "incoming_threat" ? 0.7 : 0.55))
+    .arcDashLength(1)              // solid, continuous line (no flying-dash gaps)
+    .arcDashGap(0)
+    .arcDashAnimateTime(0)
+    .arcsTransitionDuration(800)  // smooth fade as arcs roll in / out
     .arcAltitudeAutoScale(0.45)
     .onArcHover((arc) => { hoveredArc = arc; refreshHover(); })
     // Glowing attacker points
@@ -145,12 +200,38 @@ async function buildGlobe() {
   controls.enableDamping = true;
 
   // Load offline country polygons for hover detection (non-fatal if missing).
+  globe.polygonsData(await loadPolygons());
+
+  // ── Live day/night: blend day + night textures by the Sun's direction, and
+  //    float a glowing sun sprite over the subsolar point. ───────────────────
   try {
-    const res = await fetch("/textures/countries-110m.geojson");
-    const gj = await res.json();
-    globe.polygonsData((gj && gj.features) || []);
+    const loader = new THREE.TextureLoader();
+    dnMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        dayTexture:   { value: loader.load("/textures/earth-day.jpg") },
+        nightTexture: { value: loader.load("/textures/earth-night.jpg") },
+        sunPosition:  { value: new THREE.Vector2() },
+        globeRotation: { value: new THREE.Vector2() },
+      },
+      vertexShader: DN_VERT,
+      fragmentShader: DN_FRAG,
+    });
+    globe.globeMaterial(dnMaterial);
+    // keep the terminator geographically fixed while the globe spins
+    globe.onZoom((pov) => {
+      if (dnMaterial) dnMaterial.uniforms.globeRotation.value.set(pov.lng, pov.lat);
+    });
+
+    const sunMat = new THREE.SpriteMaterial({
+      map: makeSunGlow(THREE), color: 0xffffff,
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    });
+    sunSprite = new THREE.Sprite(sunMat);
+    sunSprite.scale.set(52, 52, 1);
+    globe.scene().add(sunSprite);
+    updateDayNight();   // place it immediately
   } catch (e) {
-    lastError = "country polygons unavailable: " + (e.message || e);
+    lastError = "day/night setup failed: " + (e.message || e);
   }
 
   // Cursor tracking for the hover tooltip.
@@ -174,6 +255,41 @@ async function buildGlobe() {
   building = false;
 }
 
+// Country polygons are offline and shared by both renderers — fetch once.
+async function loadPolygons() {
+  if (polyFeatures) return polyFeatures;
+  try {
+    const res = await fetch("/textures/countries-110m.geojson");
+    const gj = await res.json();
+    polyFeatures = (gj && gj.features) || [];
+  } catch (e) {
+    lastError = "country polygons unavailable: " + (e.message || e);
+    polyFeatures = [];
+  }
+  return polyFeatures;
+}
+
+// ── 2D flat-map construction (lazy, like the globe) ─────────────────────────────
+async function buildFlat() {
+  const host = el("threatmap-flat");
+  if (!host || flat) return;
+  flat = createFlatMap(host, {
+    colorFor: catColor,
+    flyMs: ARC_FLY_MS,
+    arcKey: keyOf,
+    // hover/tooltip share the exact same module state + tooltip as the globe
+    onArc:  (a) => { hoveredArc = a; refreshHover(); },
+    onPoint:(p) => { hoveredPoint = p; refreshHover(); },
+    onPoly: (poly) => { hoveredPoly = poly; refreshHover(); },
+    onMove: (x, y) => {
+      lastMouse.x = x; lastMouse.y = y;
+      if (hoveredArc || hoveredPoint || hoveredPoly) positionTooltip();
+    },
+  });
+  flat.setDC(dc || { lat: 21.1463, lng: 79.0849, label: "Datacenter" });
+  flat.setPolygons(await loadPolygons());
+}
+
 // ── Hover tooltip (arcs = alerts, points = attacker IPs, polygons = country) ──
 // Follows the cursor. Precedence: attacker point > attack arc > country.
 function refreshHover() {
@@ -191,12 +307,19 @@ function refreshHover() {
     tip.classList.add("show");
     positionTooltip();
   }
-  // Pause auto-rotate while the analyst is inspecting anything.
-  if (globe) globe.controls().autoRotate = !(hoveredPoint || hoveredArc || hoveredPoly) && isActive();
+  // Pause auto-rotate while the analyst is inspecting anything (globe only).
+  if (globe && viewMode === "3d") {
+    globe.controls().autoRotate = !(hoveredPoint || hoveredArc || hoveredPoly) && isActive();
+  }
+}
+
+// The stage the cursor coordinates are measured against — whichever view is up.
+function activeStage() {
+  return viewMode === "2d" ? el("threatmap-flat") : el("threatmap-globe");
 }
 
 function positionTooltip() {
-  const tip = el("tm-tooltip"); const area = el("threatmap-globe");
+  const tip = el("tm-tooltip"); const area = activeStage();
   if (!tip || !area) return;
   const pad = 14;
   let x = lastMouse.x + 16, y = lastMouse.y + 16;
@@ -250,6 +373,30 @@ function sizeGlobe() {
   }
 }
 
+// ── Live day/night driver (shared by the globe shader + the flat map) ──────────
+function updateDayNight() {
+  const sub = subsolarPoint(new Date());
+  if (dnMaterial) dnMaterial.uniforms.sunPosition.value.set(sub.lng, sub.lat);
+  if (sunSprite && globe) {
+    const c = globe.getCoords(sub.lat, sub.lng, 1.6);   // float it above the surface
+    sunSprite.position.set(c.x, c.y, c.z);
+  }
+  if (flat) flat.updateDayNight(sub);
+}
+
+// A soft radial sun glow as a canvas texture (no external asset).
+function makeSunGlow(THREE) {
+  const c = document.createElement("canvas"); c.width = c.height = 128;
+  const g = c.getContext("2d");
+  const grd = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  grd.addColorStop(0.0, "rgba(255,252,235,1)");
+  grd.addColorStop(0.22, "rgba(255,241,179,0.95)");
+  grd.addColorStop(0.5, "rgba(255,205,90,0.35)");
+  grd.addColorStop(1.0, "rgba(255,190,60,0)");
+  g.fillStyle = grd; g.fillRect(0, 0, 128, 128);
+  return new THREE.CanvasTexture(c);
+}
+
 // ── Data application ──────────────────────────────────────────────────────────
 function rememberKey(k) {
   seenKeys.add(k);
@@ -278,11 +425,13 @@ function applyFeed(data) {
     fresh.push(a);
   }
 
-  // On the very first load, seed the display with the most-recent slice so the
-  // map isn't empty, but don't fire a ring storm for historical events.
-  const ringFor = firstLoad ? [] : fresh;
+  // Cap new arcs per poll so the on-screen set persists across several polls
+  // instead of fully churning out each time. First load seeds a full screen.
+  const ingest = firstLoad ? fresh : fresh.slice(-ARC_INGEST_PER_POLL);
+  // don't fire a ring storm for the historical first-load slice.
+  const ringFor = firstLoad ? [] : ingest;
 
-  for (const a of fresh) {
+  for (const a of ingest) {
     arcs.push(a);
     // external endpoint point (accumulate count per IP, carry details for hover)
     const p = points.get(a.ip);
@@ -300,9 +449,9 @@ function applyFeed(data) {
       });
     }
   }
-  if (firstLoad && fresh.length) {
+  if (firstLoad && ingest.length) {
     // keep only the freshest slice visible at startup
-    const seed = fresh.slice(-MAX_ARCS);
+    const seed = ingest.slice(-MAX_ARCS);
     arcs.length = 0;
     arcs.push(...seed);
   }
@@ -328,22 +477,42 @@ function applyFeed(data) {
     if (now - rings[i].born > 1500) rings.splice(i, 1);
   }
 
-  paintGlobe();
+  paint();
   paintSidebar(data, fresh);
   firstLoad = false;
 }
 
-// Push the (filtered) arcs / points / rings to the globe. Called on each feed
+// Render the current frame onto whichever view is active. Called on each feed
 // and whenever a category filter is toggled.
+function paint() {
+  if (viewMode === "2d") paintFlat();
+  else paintGlobe();
+}
+
+function visibleFrame() {
+  return {
+    arcs:   arcs.filter((a) => activeCats.has(a.category)),
+    points: [...points.values()].filter((p) => activeCats.has(p.category)),
+  };
+}
+
+// Push the (filtered) arcs / points / rings to the globe.
 function paintGlobe() {
-  if (!globe) return;
-  const visArcs   = arcs.filter((a) => activeCats.has(a.category));
-  const visPoints = [...points.values()].filter((p) => activeCats.has(p.category));
+  if (!globe || !dc) return;   // dc is set on first feed; guard the pre-poll paint
+  const f = visibleFrame();
   const dcRing = { lat: dc.lat, lng: dc.lng, rgb: "124,255,203",
                    maxR: 5, speed: 3.2, period: 900, dc: true };
-  globe.arcsData(visArcs);
-  globe.pointsData(visPoints);
+  globe.arcsData(f.arcs);
+  globe.pointsData(f.points);
   globe.ringsData([dcRing, ...rings]);
+}
+
+// Same data, 2D flat map.
+function paintFlat() {
+  if (!flat || !dc) return;
+  const f = visibleFrame();
+  const dcRing = { lat: dc.lat, lng: dc.lng, rgb: "124,255,203", dc: true };
+  flat.render({ dc, arcs: f.arcs, points: f.points, rings: [dcRing, ...rings] });
 }
 
 // ── Sidebar / HUD ─────────────────────────────────────────────────────────────
@@ -428,17 +597,18 @@ function isActive() {
 }
 
 async function start() {
-  if (!mounted) await buildGlobe();
-  if (!globe) return;              // import failed — leave a clean no-op
-  sizeGlobe();
-  globe.controls().autoRotate = true;
+  await applyViewMode();           // builds + shows the active renderer (2D or 3D)
   poll();                          // immediate
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(() => { if (isActive()) poll(); }, POLL_MS);
+  updateDayNight();                // place the sun now…
+  if (sunTimer) clearInterval(sunTimer);
+  sunTimer = setInterval(() => { if (isActive()) updateDayNight(); }, SUN_MS);
 }
 
 function stop() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  if (sunTimer)  { clearInterval(sunTimer);  sunTimer = null; }
   if (globe) globe.controls().autoRotate = false;   // save CPU when hidden
 }
 
@@ -451,9 +621,45 @@ function initFilters() {
       if (activeCats.has(cat)) activeCats.delete(cat);
       else activeCats.add(cat);
       btn.classList.toggle("off", !activeCats.has(cat));
-      paintGlobe();                 // re-render immediately, no refetch
+      paint();                      // re-render immediately, no refetch
     });
   });
+}
+
+// ── 2D / 3D view toggle ───────────────────────────────────────────────────────
+function initViewToggle() {
+  document.querySelectorAll(".tm-viewbtn").forEach((b) => {
+    b.classList.toggle("active", b.dataset.view === viewMode);
+    b.addEventListener("click", () => setViewMode(b.dataset.view));
+  });
+}
+
+function setViewMode(mode) {
+  if (mode !== "2d" && mode !== "3d") return;
+  if (mode === viewMode) return;
+  viewMode = mode;
+  try { localStorage.setItem("tm-view", mode); } catch (e) {}
+  applyViewMode();
+}
+
+// Build (lazily) and show the active renderer, hide the other, then repaint.
+async function applyViewMode() {
+  document.querySelectorAll(".tm-viewbtn").forEach((b) =>
+    b.classList.toggle("active", b.dataset.view === viewMode));
+  const g = el("threatmap-globe"), fwrap = el("threatmap-flat");
+  if (viewMode === "2d") {
+    if (!flat) await buildFlat();
+    if (g) g.style.visibility = "hidden";
+    if (fwrap) fwrap.style.display = "block";
+    if (globe) globe.controls().autoRotate = false;   // stop 3D work while hidden
+  } else {
+    if (!mounted) await buildGlobe();
+    if (fwrap) fwrap.style.display = "none";
+    if (g) g.style.visibility = "visible";
+    if (globe) { sizeGlobe(); globe.controls().autoRotate = isActive(); }
+  }
+  paint();
+  updateDayNight();   // place the sun/terminator on the freshly-shown view
 }
 
 export function initThreatMap() {
@@ -461,6 +667,7 @@ export function initThreatMap() {
   if (!page) return;
 
   initFilters();
+  initViewToggle();
 
   // React to this tab becoming active / inactive (works for clicks, URL, back/fwd).
   observer = new MutationObserver(() => { isActive() ? start() : stop(); });
