@@ -21,7 +21,7 @@ const MAX_POINTS     = 120;    // rolling attacker-point budget
 // cap the whole arc set churns out every poll. Ingest only the newest few per
 // poll so each arc lingers ~MAX_ARCS/INGEST polls (~1 min) before rolling off.
 const ARC_INGEST_PER_POLL = 24;
-const ARC_FLY_MS     = 2200;   // 2D flat-map comet travel time along each arc
+const ARC_FLY_MS     = 2200;   // arc dash A->B travel time (3D globe + 2D comet)
 
 // Severity → colour. Matches the dashboard palette (red / orange / cyan).
 // Traffic categories — colour + label + arc flow direction. Mirrors the analyst
@@ -149,10 +149,13 @@ async function buildGlobe() {
     })
     // Stroke also defines the arc's tube radius = the hover hit-target, so it's
     // kept a bit chunky to make the lines easy to hover.
-    .arcStroke((d) => (d.category === "incoming_threat" ? 0.7 : 0.55))
-    .arcDashLength(1)              // solid, continuous line (no flying-dash gaps)
-    .arcDashGap(0)
-    .arcDashAnimateTime(0)
+    .arcStroke((d) => (d.category === "incoming_threat" ? 0.7 : 0.6))
+    // moving "comet" dash that travels start -> end so each arc visibly flows
+    // from A to B; desynced per-arc so they don't pulse in unison.
+    .arcDashLength(0.5)
+    .arcDashGap(0.9)
+    .arcDashInitialGap(() => Math.random())
+    .arcDashAnimateTime(ARC_FLY_MS)
     .arcsTransitionDuration(800)  // smooth fade as arcs roll in / out
     .arcAltitudeAutoScale(0.45)
     .onArcHover((arc) => { hoveredArc = arc; refreshHover(); })
