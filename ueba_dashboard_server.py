@@ -207,8 +207,15 @@ FP_FILE: Path         = Path(_DEFAULTS["false_positives_file"])
 FP_PATTERNS_FILE: Path = Path(_DEFAULTS["fp_patterns_file"])
 
 # ── Alert cache — avoids reading the full file on every API request ──
+# The live alerts file is append-only and grows large (hundreds of MB). The
+# engine appends every second, so an mtime-keyed cache never hits — instead we
+# track the byte offset we've parsed up to and incrementally parse only the
+# newly-appended lines, keeping a trimmed in-memory list. Inode + size guard a
+# rotation/truncation (midnight rollover) by forcing a full re-read.
 _alert_cache: list = []
-_alert_cache_mtime: float = 0.0
+_alert_cache_mtime: float = 0.0   # retained for compatibility (unused by the tail reader)
+_alert_cache_off: int = 0         # byte offset parsed up to in the live file
+_alert_cache_inode: int = 0       # inode of the file the offset belongs to
 
 # ── Archive cache — historical daily alert zips, keyed by path → (mtime, alerts).
 # Daily archives are written once at the midnight rotation and never change, so
@@ -627,38 +634,59 @@ def _remove_patterns_for_descriptions(descriptions) -> int:
 
 
 def _read_live_alerts(n: int | None = None) -> list:
-    """Read the live ueba_alerts.jsonl (today's alerts), newest `n` lines, with
-    mtime+TTL caching. Returns the raw alert list (no FP filtering), oldest-first.
+    """Read the live ueba_alerts.jsonl (today's alerts), newest `n`, oldest-first
+    (no FP filtering).
+
+    The file is append-only and large (hundreds of MB of fat records), and the
+    engine appends to it every second — so re-reading the whole file per request
+    (and an mtime-keyed cache, which never hits because mtime keeps changing) made
+    every API call re-parse the entire file and take minutes. Instead we keep a
+    parsed cache and only read the bytes appended since the last call, tracking a
+    byte offset; inode + a shrink check force a full re-read on midnight rotation.
     """
-    global _alert_cache, _alert_cache_mtime
+    global _alert_cache, _alert_cache_off, _alert_cache_inode
     if n is None:
         n = CFG["max_alerts"]
     if not ALERTS_FILE.exists():
         return []
     try:
-        mtime = ALERTS_FILE.stat().st_mtime
+        st = ALERTS_FILE.stat()
     except Exception:
-        return _alert_cache
-    if _alert_cache and mtime == _alert_cache_mtime and \
-            (time.time() - _alert_cache_mtime) < CFG["cache_ttl_secs"]:
-        return _alert_cache
-    alerts = []
-    try:
-        with open(ALERTS_FILE, "r", encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
-        for line in lines[-n:]:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                alerts.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-    except Exception:
-        return _alert_cache
-    _alert_cache = alerts
-    _alert_cache_mtime = mtime
-    return alerts
+        return _alert_cache[-n:] if n else _alert_cache
+
+    # Detect rotation/truncation (midnight rollover replaces the file, or it
+    # shrinks): drop the cache and re-read from the top.
+    if st.st_ino != _alert_cache_inode or st.st_size < _alert_cache_off:
+        _alert_cache = []
+        _alert_cache_off = 0
+        _alert_cache_inode = st.st_ino
+
+    # Parse only the newly-appended bytes (if any) since the last read.
+    if st.st_size > _alert_cache_off:
+        try:
+            with open(ALERTS_FILE, "rb") as f:
+                f.seek(_alert_cache_off)
+                chunk = f.read()
+        except Exception:
+            return _alert_cache[-n:] if n else _alert_cache
+        # Consume up to the last complete line; a trailing partial line (engine
+        # mid-append) is left for the next call.
+        nl = chunk.rfind(b"\n")
+        if nl != -1:
+            complete = chunk[:nl + 1]
+            _alert_cache_off += len(complete)
+            for raw in complete.split(b"\n"):
+                if not raw.strip():
+                    continue
+                try:
+                    _alert_cache.append(json.loads(raw))
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+            cap = int(CFG.get("max_alerts", 500000) or 500000)
+            if len(_alert_cache) > cap:
+                del _alert_cache[:len(_alert_cache) - cap]
+
+    return _alert_cache[-n:] if n else _alert_cache
 
 
 def _alert_ts(a: dict) -> datetime | None:
@@ -1086,7 +1114,7 @@ def campaigns():
         user = get_user(a)
         host = (a.get("host", {}) or {}).get("name", "")
         t    = ueba.get("processed_at", "")
-        sig  = (a.get("security", {}) or {}).get("signature", "")[:60]
+        sig  = ((a.get("security", {}) or {}).get("signature") or "")[:60]
 
         cd = campaign_data[cid]
         cd["users"].add(user)
@@ -2073,7 +2101,10 @@ def main() -> None:
           f"(history {CFG.get('history_days')}d, feed cap {CFG.get('max_feed_alerts')})")
     _start_agent_sync_thread()
     _start_archive_warm_thread()
-    app.run(host=CFG["host"], port=CFG["port"], debug=args.debug)
+    # threaded=True: serve requests concurrently so one slow scan (e.g. a wide
+    # hours=N feed query over the multi-GB enriched file) can't block every other
+    # endpoint and freeze the whole dashboard.
+    app.run(host=CFG["host"], port=CFG["port"], debug=args.debug, threaded=True)
 
 
 if __name__ == "__main__":
