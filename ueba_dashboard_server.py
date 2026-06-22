@@ -77,6 +77,13 @@ _DEFAULTS = {
     # alerts cost ~0.5 KB each on the wire (~260 MB worst case) instead of ~2.3 KB.
     "history_days":    95,
     "max_feed_alerts": 500000,
+    # /api/feed table payload cap. The feed table + client-side charts only ever
+    # need the most-recent slice; on a high-volume feed a wide window can hold
+    # tens of thousands of alerts, and shipping all of them (tens of MB) freezes
+    # the browser parsing/aggregating them. The bulk feed returns at most this
+    # many newest rows. Window TOTALS stay accurate via /api/stats (which counts
+    # the full window up to max_feed_alerts), so this only bounds the table feed.
+    "feed_row_cap":    5000,
     # Live threat map (firewall geoIP). The /api/geofeed endpoint tails recent
     # FIREWALL events from the enriched feed, geolocates each external source IP
     # via a local MaxMind GeoLite2 DB (fully offline, no API key), and serves
@@ -1026,7 +1033,12 @@ def feed():
     payload; the dashboard lazy-loads each alert's evidence via /api/evidence.
     """
     alerts = load_alerts(include_fp=_wants_include_fp())
-    return jsonify([_alert_to_feed_item(a, include_evidence=False) for a in reversed(alerts)])
+    # Cap the table payload to the newest rows so a high-volume window doesn't
+    # ship tens of MB and freeze the browser. alerts is oldest-first, so the
+    # newest slice is the tail; reverse it to newest-first for the table.
+    cap = int(CFG.get("feed_row_cap", 5000) or 5000)
+    recent = alerts[-cap:] if len(alerts) > cap else alerts
+    return jsonify([_alert_to_feed_item(a, include_evidence=False) for a in reversed(recent)])
 
 
 @app.route("/api/evidence/<path:event_id>")
@@ -2060,6 +2072,15 @@ def _warm_archive_cache() -> None:
               f"from {CFG.get('archive_dir')}")
     except Exception as e:  # never let warm-up crash startup
         print(f"[dashboard] archive cache warm-up failed ({e}) — loading lazily")
+    # Also pre-parse the live alerts file once so the first request after a
+    # restart doesn't pay the one-time full-file parse (the live file can be
+    # hundreds of MB; subsequent reads are incremental/cheap).
+    try:
+        t = time.time()
+        n = len(_read_live_alerts())
+        print(f"[dashboard] live cache warmed: {n} alerts in {time.time() - t:.1f}s")
+    except Exception as e:
+        print(f"[dashboard] live cache warm-up failed ({e}) — loading lazily")
 
 
 def _start_archive_warm_thread() -> None:
