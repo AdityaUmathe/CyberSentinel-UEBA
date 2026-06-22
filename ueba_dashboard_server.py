@@ -2064,6 +2064,17 @@ def _warm_archive_cache() -> None:
     """Pre-parse archived alert zips within the history window so the first wide
     ('All'/30D/90D) request doesn't block several seconds on a cold cache. Runs
     in a daemon thread; the server starts serving immediately regardless."""
+    # Live file FIRST: it backs every default (24h) request and is the one the
+    # first post-restart call needs. The live file can be hundreds of MB, so this
+    # one-time full parse (subsequent reads are incremental/cheap) must finish
+    # before the heavier 95-day archive warm, or the first request pays it.
+    try:
+        t = time.time()
+        n = len(_read_live_alerts())
+        print(f"[dashboard] live cache warmed: {n} alerts in {time.time() - t:.1f}s")
+    except Exception as e:
+        print(f"[dashboard] live cache warm-up failed ({e}) — loading lazily")
+    # Then the archives (wide 'All'/30D/90D windows) in the background.
     try:
         cutoff = datetime.now(timezone.utc) - timedelta(days=int(CFG.get("history_days", 95) or 95))
         t = time.time()
@@ -2072,15 +2083,6 @@ def _warm_archive_cache() -> None:
               f"from {CFG.get('archive_dir')}")
     except Exception as e:  # never let warm-up crash startup
         print(f"[dashboard] archive cache warm-up failed ({e}) — loading lazily")
-    # Also pre-parse the live alerts file once so the first request after a
-    # restart doesn't pay the one-time full-file parse (the live file can be
-    # hundreds of MB; subsequent reads are incremental/cheap).
-    try:
-        t = time.time()
-        n = len(_read_live_alerts())
-        print(f"[dashboard] live cache warmed: {n} alerts in {time.time() - t:.1f}s")
-    except Exception as e:
-        print(f"[dashboard] live cache warm-up failed ({e}) — loading lazily")
 
 
 def _start_archive_warm_thread() -> None:
