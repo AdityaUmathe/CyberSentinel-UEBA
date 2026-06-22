@@ -215,9 +215,15 @@ class RAGRetriever:
                         metadata_path)
             return
 
-        # Load index — use GPU if available
+        # Load index. Default to CPU: this is a 5.6M-vector FLAT (brute-force)
+        # index, so a GPU search is pure compute and — run per anomaly at the
+        # current high feed volume — pins the L40S at ~95% SM, starving the
+        # co-tenant vLLM/Vaani inference server that shares this GPU. The vectors
+        # are tiny (35-d), so CPU flat search (multi-threaded SIMD) is fast
+        # enough. Opt back into GPU with rag.inference_device: cuda.
         cpu_index = faiss.read_index(index_path)
-        if hasattr(faiss, "StandardGpuResources"):
+        dev = (self.cfg.get("inference_device") or "cpu").lower()
+        if dev == "cuda" and hasattr(faiss, "StandardGpuResources"):
             try:
                 self._gpu_res = faiss.StandardGpuResources()
                 self.index = faiss.index_cpu_to_gpu(self._gpu_res, 0, cpu_index)
@@ -227,6 +233,7 @@ class RAGRetriever:
                 self.index = cpu_index
         else:
             self.index = cpu_index
+            log.info("FAISS RAG index on CPU: %d vectors", cpu_index.ntotal)
         log.info("FAISS index loaded: %d vectors", self.index.ntotal)
 
         # Load metadata

@@ -188,6 +188,7 @@ score_fusion:
 
 # ── RAG (Semantic Retrieval) ──────────────────────────────────────────────────
 rag:
+  inference_device: cpu          # RAG FAISS index device; cpu frees the shared GPU (set cuda to use GPU)
   top_k: 5
   min_similarity: 0.60
   max_index_size: 7000000        # runtime ceiling — add_to_index() refuses beyond this
