@@ -7,7 +7,7 @@
 // Flask serves the same index.html for every route in TAB_PATHS, so direct
 // links like http://host:3026/feed work as well as in-app navigation.
 
-export const TAB_PATHS = ["overview", "feed", "users", "campaigns", "endpoints", "false-positives", "threatmap"];
+export const TAB_PATHS = ["overview", "incidents", "feed", "users", "campaigns", "endpoints", "false-positives", "threatmap"];
 const DEFAULT_TAB = "overview";
 
 function pathToTab(pathname) {

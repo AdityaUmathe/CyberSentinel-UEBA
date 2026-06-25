@@ -36,6 +36,7 @@
 
 <nav>
   <div class="tab active" data-tab="overview">Overview</div>
+  <div class="tab" data-tab="incidents">Incidents <span class="nav-pill" id="inc-badge">0</span></div>
   <div class="tab" data-tab="feed">Alert Feed</div>
   <div class="tab" data-tab="users">User Risk</div>
   <div class="tab" data-tab="campaigns">Campaigns</div>
@@ -497,6 +498,29 @@
         </div>
         <div id="users-list"></div>
       </div>
+    </div>
+  </div>
+
+  <!-- CAMPAIGNS -->
+  <!-- INCIDENTS -->
+  <div class="page" id="page-incidents">
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">Entity Incidents</span>
+        <span class="panel-badge" id="inc-badge2">0</span>
+        <span style="margin-left:auto;font-family:var(--mono2);font-size:11px;color:var(--text3)">
+          Rollup window
+          <select id="inc-window" onchange="window.__setIncidentWindow(this.value)"
+                  style="background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 6px;margin-left:4px;font-family:var(--mono2);font-size:11px">
+            <option value="15">15 min</option>
+            <option value="30">30 min</option>
+            <option value="60" selected>1 hour</option>
+            <option value="240">4 hours</option>
+            <option value="1440">1 day</option>
+          </select>
+        </span>
+      </div>
+      <div id="incidents-list"></div>
     </div>
   </div>
 

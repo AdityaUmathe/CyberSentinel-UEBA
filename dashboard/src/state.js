@@ -28,6 +28,8 @@ export const state = {
   feedData: [],
   usersData: [],
   campaignsData: [],
+  incidentsData: [],
+  incidentWindow: 60,   // entity-incident rollup bucket, minutes (Incidents tab)
   agentsData: [],
   selectedAgent: null,
   selectedUser:  null,

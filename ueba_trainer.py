@@ -363,6 +363,18 @@ class UEBATrainer:
         if requested == "cuda" and torch.cuda.is_available():
             self.device = torch.device("cuda")
             log.info("GPU detected: %s", torch.cuda.get_device_name(0))
+            # Co-tenant safety: the L40S is shared with a production vLLM/Vaani
+            # process. Hard-cap THIS process's GPU memory (env UEBA_GPU_MEM_FRACTION,
+            # fraction of total device memory) so a training spike can never starve
+            # the co-tenant — if we exceed the cap, OUR process OOMs, not theirs.
+            _frac = os.environ.get("UEBA_GPU_MEM_FRACTION")
+            if _frac:
+                try:
+                    torch.cuda.set_per_process_memory_fraction(float(_frac), 0)
+                    log.info("GPU memory capped at %.0f%% of device for co-tenant safety",
+                             float(_frac) * 100)
+                except Exception as e:
+                    log.warning("Could not set GPU memory fraction (%s) — continuing", e)
         else:
             self.device = torch.device("cpu")
             if requested == "cuda":

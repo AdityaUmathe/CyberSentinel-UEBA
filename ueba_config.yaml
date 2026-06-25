@@ -30,7 +30,7 @@ paths:
 # ── Preprocessing ─────────────────────────────────────────────────────────────
 preprocessing:
   chunk_size: 50000
-  min_events_per_user: 100
+  min_events_per_user: 2000
 
   feature_fields:
     temporal:
@@ -159,7 +159,9 @@ clusterer:
   min_cluster_size: 5
   min_samples: 3
   metric: "euclidean"
-  run_interval_seconds: 300
+  run_interval_seconds: 900   # was 300; each pass rewrites the whole alerts file
+                              # (campaign_id patch) → raise to cut dashboard cache
+                              # invalidations + I/O load on the backlogged engine
   buffer_size: 1000
   min_persistence: 0.3
 

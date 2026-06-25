@@ -223,6 +223,12 @@ _alert_cache: list = []
 _alert_cache_mtime: float = 0.0   # retained for compatibility (unused by the tail reader)
 _alert_cache_off: int = 0         # byte offset parsed up to in the live file
 _alert_cache_inode: int = 0       # inode of the file the offset belongs to
+# Single-flight lock: during a cold window (engine rewrote the file → new inode)
+# a burst of parallel API requests would otherwise each trigger a full re-parse
+# of the hundreds-of-MB live file at once (thundering herd) and corrupt the shared
+# cache via interleaved global mutation. Serialize the cache read/update so only
+# one thread re-parses; the rest reuse the warm cache.
+_alert_read_lock = __import__("threading").Lock()
 
 # ── Archive cache — historical daily alert zips, keyed by path → (mtime, alerts).
 # Daily archives are written once at the midnight rotation and never change, so
@@ -661,39 +667,43 @@ def _read_live_alerts(n: int | None = None) -> list:
     except Exception:
         return _alert_cache[-n:] if n else _alert_cache
 
-    # Detect rotation/truncation (midnight rollover replaces the file, or it
-    # shrinks): drop the cache and re-read from the top.
-    if st.st_ino != _alert_cache_inode or st.st_size < _alert_cache_off:
-        _alert_cache = []
-        _alert_cache_off = 0
-        _alert_cache_inode = st.st_ino
+    # Serialize cache update so a burst of parallel requests during a cold window
+    # doesn't trigger N concurrent full re-parses (thundering herd) or corrupt the
+    # shared cache. One thread re-parses; the others wait then reuse the warm cache.
+    with _alert_read_lock:
+        # Detect rotation/truncation (midnight rollover replaces the file, or it
+        # shrinks): drop the cache and re-read from the top.
+        if st.st_ino != _alert_cache_inode or st.st_size < _alert_cache_off:
+            _alert_cache = []
+            _alert_cache_off = 0
+            _alert_cache_inode = st.st_ino
 
-    # Parse only the newly-appended bytes (if any) since the last read.
-    if st.st_size > _alert_cache_off:
-        try:
-            with open(ALERTS_FILE, "rb") as f:
-                f.seek(_alert_cache_off)
-                chunk = f.read()
-        except Exception:
-            return _alert_cache[-n:] if n else _alert_cache
-        # Consume up to the last complete line; a trailing partial line (engine
-        # mid-append) is left for the next call.
-        nl = chunk.rfind(b"\n")
-        if nl != -1:
-            complete = chunk[:nl + 1]
-            _alert_cache_off += len(complete)
-            for raw in complete.split(b"\n"):
-                if not raw.strip():
-                    continue
-                try:
-                    _alert_cache.append(json.loads(raw))
-                except (json.JSONDecodeError, UnicodeDecodeError):
-                    continue
-            cap = int(CFG.get("max_alerts", 500000) or 500000)
-            if len(_alert_cache) > cap:
-                del _alert_cache[:len(_alert_cache) - cap]
+        # Parse only the newly-appended bytes (if any) since the last read.
+        if st.st_size > _alert_cache_off:
+            try:
+                with open(ALERTS_FILE, "rb") as f:
+                    f.seek(_alert_cache_off)
+                    chunk = f.read()
+            except Exception:
+                return _alert_cache[-n:] if n else _alert_cache
+            # Consume up to the last complete line; a trailing partial line (engine
+            # mid-append) is left for the next call.
+            nl = chunk.rfind(b"\n")
+            if nl != -1:
+                complete = chunk[:nl + 1]
+                _alert_cache_off += len(complete)
+                for raw in complete.split(b"\n"):
+                    if not raw.strip():
+                        continue
+                    try:
+                        _alert_cache.append(json.loads(raw))
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        continue
+                cap = int(CFG.get("max_alerts", 500000) or 500000)
+                if len(_alert_cache) > cap:
+                    del _alert_cache[:len(_alert_cache) - cap]
 
-    return _alert_cache[-n:] if n else _alert_cache
+        return _alert_cache[-n:] if n else _alert_cache
 
 
 def _alert_ts(a: dict) -> datetime | None:
@@ -1166,6 +1176,116 @@ def campaigns():
 
     result.sort(key=lambda x: x["last_seen"], reverse=True)
     return jsonify(result)
+
+
+# Verdict severity ordering, used to pick an incident's worst verdict.
+_VERDICT_RANK = {"suspicious": 1, "anomalous": 2, "highly_anomalous": 3}
+
+
+@app.route("/api/incidents")
+def incidents():
+    """Entity-behaviour incidents: alerts rolled up by (entity, time-window).
+
+    This is the "calm" UEBA view — instead of one row per raw event (a single
+    brute-force can be 1,000+ rows), each abnormal entity gets ONE incident per
+    window, with a count and a drill-down list of contributing event_ids (the
+    existing /api/evidence/<event_id> renders each one). It is purely additive:
+    it reuses load_alerts()/get_user()/_alert_ts() so it matches every other
+    panel, and changes nothing about the engine's per-event alert schema.
+
+    Query params: ?hours=N (timeline window, same as the rest of the dashboard),
+    ?window=M (rollup bucket in minutes, default 60, clamped 5..1440),
+    ?include_fp=1 (show FP-marked alerts).
+    """
+    try:
+        win_min = int(request.args.get("window", 60))
+    except (TypeError, ValueError):
+        win_min = 60
+    win_min = max(5, min(win_min, 1440))
+    win_sec = win_min * 60
+
+    alerts = load_alerts(include_fp=_wants_include_fp())
+
+    INCIDENT_CAP = 5000         # incidents returned (newest-first after sort)
+
+    groups: dict = defaultdict(lambda: {
+        "count": 0, "max_score": 0.0, "sum_score": 0.0,
+        "verdicts": defaultdict(int), "reasons": defaultdict(int),
+        "signatures": set(), "campaign_ids": set(), "hosts": set(),
+        "first_seen": "", "last_seen": "",
+    })
+
+    for a in alerts:
+        ts = _alert_ts(a)
+        if ts is None:
+            continue
+        start_epoch = int(ts.timestamp()) // win_sec * win_sec
+        window_start = datetime.fromtimestamp(start_epoch, tz=timezone.utc).isoformat()
+        entity = get_user(a)
+        ueba = a.get("ueba", {}) or {}
+        sec  = a.get("security", {}) or {}
+        t    = ueba.get("processed_at") or a.get("event_time") or ""
+
+        g = groups[(entity, window_start)]
+        g["count"] += 1
+        score = float(ueba.get("combined_score") or 0.0)
+        g["max_score"] = max(g["max_score"], score)
+        g["sum_score"] += score
+        g["verdicts"][ueba.get("risk_verdict", "")] += 1
+        for r in (ueba.get("anomaly_reasons") or []):
+            g["reasons"][r] += 1
+        sig = ((sec.get("signature")) or "")[:60]
+        if sig:
+            g["signatures"].add(sig)
+        cid = ueba.get("campaign_id")
+        if cid:
+            g["campaign_ids"].add(cid)
+        host = (a.get("host", {}) or {}).get("name", "")
+        if host:
+            g["hosts"].add(host)
+        if not g["first_seen"] or t < g["first_seen"]:
+            g["first_seen"] = t
+        if t > g["last_seen"]:
+            g["last_seen"] = t
+
+    result = []
+    for (entity, window_start), g in groups.items():
+        window_end = datetime.fromisoformat(window_start) + timedelta(minutes=win_min)
+        # An incident takes the severity of its WORST event, not its most common
+        # one — otherwise a burst of low-severity events would bury a single
+        # highly-anomalous one inside it and sink the incident's ranking.
+        present = [v for v in g["verdicts"] if v]
+        top_verdict = max(present, key=lambda v: _VERDICT_RANK.get(v, 0)) if present else ""
+        result.append({
+            "incident_id":   f"{entity}|{window_start}",
+            "entity":        entity,
+            "window_start":  window_start,
+            "window_end":    window_end.isoformat(),
+            "window_minutes": win_min,
+            "count":          g["count"],
+            "max_score":      round(g["max_score"], 4),
+            "avg_score":      round(g["sum_score"] / g["count"], 4) if g["count"] else 0.0,
+            "top_verdict":    top_verdict,
+            "verdicts":       dict(g["verdicts"]),
+            "highly_anomalous": g["verdicts"].get("highly_anomalous", 0),
+            "reasons":        [r for r, _ in sorted(g["reasons"].items(), key=lambda x: -x[1])[:5]],
+            "signatures":     list(g["signatures"])[:5],
+            "campaign_ids":   list(g["campaign_ids"]),
+            "hosts":          list(g["hosts"]),
+            "first_seen":     g["first_seen"],
+            "last_seen":      g["last_seen"],
+        })
+
+    # Rank by risk: worst verdict, then peak score, then volume.
+    result.sort(key=lambda x: (_VERDICT_RANK.get(x["top_verdict"], 0),
+                               x["max_score"], x["count"]), reverse=True)
+    total = len(result)
+    return jsonify({
+        "incidents":     result[:INCIDENT_CAP],
+        "incident_total": total,
+        "incident_capped": total > INCIDENT_CAP,
+        "window_minutes": win_min,
+    })
 
 
 @app.route("/api/agents")
@@ -2023,7 +2143,7 @@ def legacy_index():
 #      index.html so the client router can activate the right tab.
 #   3. Otherwise, 404.
 SPA_TAB_PATHS = {"overview", "feed", "users", "campaigns", "endpoints",
-                 "false-positives", "threatmap"}
+                 "false-positives", "threatmap", "incidents"}
 
 @app.route("/<path:subpath>")
 def spa_fallback(subpath):

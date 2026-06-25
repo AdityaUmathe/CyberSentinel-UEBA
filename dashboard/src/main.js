@@ -8,9 +8,9 @@
 import "./styles.css";
 
 import { state } from "./state.js";
-import { fetchAll, manualRefresh, markFP, unmarkFP, markCampaignFP, unmarkPatternFP } from "./api.js";
+import { fetchAll, fetchIncidents, manualRefresh, markFP, unmarkFP, markCampaignFP, unmarkPatternFP } from "./api.js";
 import { initSse } from "./sse.js";
-import { initRouter } from "./router.js";
+import { initRouter, navigate } from "./router.js";
 import { showSkeletons } from "./ui/skeleton.js";
 import { initTheme } from "./ui/theme.js";
 import { initFooter, openFooterPage, closeFooterPage } from "./ui/footer.js";
@@ -78,8 +78,23 @@ function __copyEvId(eid, btn) {
   }
 }
 
+// Open an entity's existing User Risk detail from an incident card — reuses the
+// full per-entity drill-down instead of duplicating it in the Incidents tab.
+function __goToEntity(entity) {
+  navigate("users");
+  if (entity) loadUserDetail(entity);
+}
+
+// Change the incident rollup window (minutes) and refresh just the Incidents tab.
+function __setIncidentWindow(min) {
+  state.incidentWindow = parseInt(min, 10) || 60;
+  fetchIncidents().catch(() => {});
+}
+
 // ── Expose inline-handler functions on window ────────────────────────────────
 Object.assign(window, {
+  __goToEntity,
+  __setIncidentWindow,
   manualRefresh,
   openFooterPage,
   closeFooterPage,
@@ -118,6 +133,15 @@ if (fpToggle) {
     state.showFps = fpToggle.checked;
     fetchAll().catch(() => {});
   });
+}
+
+// ── Incidents tab: lazy-load on open (heavy entity×window rollup, kept off the
+// global refresh so it never slows the rest of the dashboard) ────────────────
+const incTab = document.querySelector('.tab[data-tab="incidents"]');
+if (incTab) incTab.addEventListener("click", () => fetchIncidents().catch(() => {}));
+// Direct deep-link to /incidents: load it once after the initial paint.
+if (location.pathname.replace(/^\/+/, "").split("/")[0] === "incidents") {
+  fetchIncidents().catch(() => {});
 }
 
 // ── First paint + initial fetch, then attach the live SSE stream ────────────

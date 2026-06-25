@@ -112,6 +112,51 @@ def safe_bool(val, default: float = 0.0) -> float:
     return default
 
 
+def resolve_entity(log: dict) -> str:
+    """Single source of truth for the UEBA entity (user/host/IP) key.
+
+    Real user identities take priority. Userless network/firewall events are
+    keyed by their source IP (``ip:<addr>``) so each internal endpoint becomes
+    its own behavioral entity instead of collapsing into one meaningless
+    ``"unknown"`` mega-bucket (it previously absorbed ~74% of all events and
+    produced a per-user autoencoder that modelled the average of all traffic).
+    Falls back to the reporting host, then literal ``"unknown"`` (≈0 events).
+
+    Used by BOTH feature extraction and the profile store so that training-time
+    bucketing and runtime AE selection can never diverge.
+
+    NOTE: object.name on network events is a destination hostname
+    (e.g. www.google.com), so it is only accepted as a username for auth events.
+    """
+    is_auth = (
+        get_nested(log, "event_category") == "auth"
+        or safe_bool(get_nested(log, "enrich.flags.is_auth_event"))
+    )
+    user = (
+        get_nested(log, "subject.name")
+        or get_nested(log, "data.srcuser")
+        or get_nested(log, "data.dstuser")
+        or get_nested(log, "context.raw_event.data.srcuser")
+        or get_nested(log, "context.raw_event.data.dstuser")
+        or (get_nested(log, "object.name") if is_auth else None)
+    )
+    if user:
+        return user
+    src_ip = (
+        get_nested(log, "subject.ip")
+        or get_nested(log, "data.srcip")
+        or get_nested(log, "context.raw_event.data.srcip")
+    )
+    if src_ip:
+        return f"ip:{src_ip}"
+    host = (
+        get_nested(log, "host.name")
+        or get_nested(log, "agent.name")
+        or get_nested(log, "context.raw_event.agent.name")
+    )
+    return f"host:{host}" if host else "unknown"
+
+
 # ── Noise Filter ──────────────────────────────────────────────────────────────
 
 # Fortigate rule IDs that represent normal policy enforcement — not behavioral anomalies.
@@ -496,22 +541,10 @@ class FeatureExtractor:
         the feature vector (used by FAISS metadata store and output writer).
         Supports both real Wazuh schema (subject/object) and legacy schema (data.srcuser).
         """
-        # Username: try all known locations across schema versions
-        # IMPORTANT: object.name on network events contains hostnames (e.g. www.google.com)
-        # Only use object.name as username fallback for auth events
-        is_auth = (
-            get_nested(log, "event_category") == "auth"
-            or safe_bool(get_nested(log, "enrich.flags.is_auth_event"))
-        )
-        user = (
-            get_nested(log, "subject.name")
-            or get_nested(log, "data.srcuser")
-            or get_nested(log, "data.dstuser")
-            or get_nested(log, "context.raw_event.data.srcuser")
-            or get_nested(log, "context.raw_event.data.dstuser")
-            or (get_nested(log, "object.name") if is_auth else None)
-            or "unknown"
-        )
+        # Entity (user / host / source-IP) key — single source of truth.
+        # Userless firewall/network events resolve to ip:<src> rather than the
+        # old "unknown" mega-bucket. See resolve_entity() for the full policy.
+        user = resolve_entity(log)
 
         # Source IP: try all known locations
         src_ip = (
@@ -652,11 +685,9 @@ class UserProfileStore:
 
     def update(self, log: dict, feature_vec: np.ndarray):
         """Update a user's profile with data from a new log event."""
-        user = (
-            get_nested(log, "subject.name")
-            or get_nested(log, "data.dstuser")
-            or "unknown"
-        )
+        # Same entity key as feature extraction so training-eligibility (which
+        # is gated off this profile store) matches the runtime AE bucket.
+        user = resolve_entity(log)
 
         existing = self.conn.execute(
             "SELECT * FROM users WHERE username = ?", (user,)

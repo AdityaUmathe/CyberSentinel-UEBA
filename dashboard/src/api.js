@@ -4,6 +4,7 @@ import { state } from "./state.js";
 import { renderStats, updateTicker, renderDashboard } from "./panels/overview.js";
 import { applyTimelineFilter } from "./panels/timeline-filter.js";
 import { renderCampaigns } from "./panels/campaigns.js";
+import { renderIncidents } from "./panels/incidents.js";
 import { loadAgentDetail } from "./panels/agents.js";
 import { loadUserDetail } from "./panels/user-detail.js";
 import { renderFalsePositives } from "./panels/false-positives.js";
@@ -53,6 +54,13 @@ export async function fetchAll() {
   renderCampaigns();
   renderFalsePositives();
 
+  // Incidents are heavy (full-window entity×time rollup) — keep them OFF the
+  // global refresh burst. Only refresh while the Incidents tab is open, and never
+  // block the main render on it.
+  if (document.getElementById("page-incidents")?.classList.contains("active")) {
+    fetchIncidents().catch(() => {});
+  }
+
   if (state.selectedAgent) {
     const found = state.agentsData.find((a) => a.agent === state.selectedAgent);
     // silent:true → don't flash the spinner; refresh data in place when ready.
@@ -70,6 +78,23 @@ export async function fetchAll() {
   if (pill) pill.style.color = "var(--green)";
   const pillSpan = document.querySelector(".status-pill span");
   if (pillSpan) pillSpan.textContent = "ENGINE LIVE";
+}
+
+// Lazy, on-demand load of the Incidents tab (entity×window rollup). Heavy, so it
+// is deliberately NOT part of the global fetchAll burst — fetched only when the
+// tab is opened or its rollup-window selector changes.
+export async function fetchIncidents() {
+  try {
+    const r = await fetch(
+      `/api/incidents?${hoursParam()}&window=${state.incidentWindow || 60}` +
+      (state.showFps ? "&include_fp=1" : "")
+    );
+    const d = await r.json();
+    state.incidentsData = (d && d.incidents) || [];
+  } catch {
+    state.incidentsData = [];
+  }
+  renderIncidents();
 }
 
 // Refresh feels instant: button shows a brief spinner state, an immediate
