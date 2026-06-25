@@ -34,6 +34,12 @@ SOC_HOST="vgipl@localhost"
 SOC_ENRICHED_DIR="/home/vgipl/CyberSentinel-Event-Correlation-Kafka/data/enriched"
 
 SNAPSHOT_RETENTION_DAYS=${SNAPSHOT_RETENTION_DAYS:-90}
+# Rolling window for combined_training.jsonl — retrain.py only ever APPENDS to
+# it, so without trimming it grows unbounded (~70 GB/month). Keep this aligned
+# with profile_store.baseline_window_days (30) so the AE/IF baseline and the
+# behavioural baseline cover the same period.
+TRAINING_RETENTION_DAYS=${TRAINING_RETENTION_DAYS:-30}
+COMBINED=/data/ueba_training/combined_training.jsonl
 
 mkdir -p "$TRAINING_DIR" "$STATE_DIR" "$(dirname "$LOG")"
 exec >> "$LOG" 2>&1
@@ -143,6 +149,48 @@ else
   setsid "$VENV_PY" ueba_engine.py >> engine.log 2>&1 < /dev/null &
   NEW_PID=$!
   echo "  Engine restart launched (new PID: $NEW_PID, takes ~35s to be fully ready)"
+fi
+
+# ── 5.5 Prune combined_training.jsonl to a rolling window ────────────────────
+# retrain.py APPENDS each week's new events to combined_training.jsonl and never
+# trims it, so it grows unbounded. Keep only events newer than
+# TRAINING_RETENTION_DAYS so features.h5 stays a rolling baseline and disk stays
+# bounded. Runs AFTER the engine restart (zero added downtime) and only when the
+# retrain succeeded. Fully defensive: streams to a temp file, refuses to produce
+# an empty result, verifies the last line is complete JSON, and only THEN swaps —
+# any failure leaves the original combined_training.jsonl untouched.
+if [ "$RETRAIN_OK" = "1" ] && [ -f "$COMBINED" ]; then
+  CUTOFF=$(date -d "${TRAINING_RETENTION_DAYS} days ago" +%Y-%m-%d)
+  TMP="${COMBINED}.pruned.$$"
+  echo "  Pruning combined_training.jsonl to events >= ${CUTOFF} (${TRAINING_RETENTION_DAYS}d window)..."
+  if "$VENV_PY" - "$COMBINED" "$TMP" "$CUTOFF" <<'PYPRUNE'
+import sys
+src, dst, cutoff = sys.argv[1], sys.argv[2], sys.argv[3]
+KEY = b'"event_time":"'; KLEN = len(KEY); cut = cutoff.encode()
+read = kept = 0
+with open(src, "rb") as fi, open(dst, "wb") as fo:
+    for line in fi:
+        read += 1
+        i = line.find(KEY)
+        if i == -1:                       # no parseable ts → keep defensively
+            kept += 1; fo.write(line); continue
+        if line[i + KLEN:i + KLEN + 10] >= cut:   # ISO8601 sorts lexically
+            kept += 1; fo.write(line)
+print(f"  PRUNE read={read} kept={kept} dropped={read - kept}")
+sys.exit(0 if kept > 0 else 3)            # never leave an empty training file
+PYPRUNE
+  then
+    if tail -1 "$TMP" | "$VENV_PY" -c "import sys,json; json.loads(sys.stdin.read())" >/dev/null 2>&1; then
+      mv "$TMP" "$COMBINED"
+      echo "  combined_training.jsonl pruned → $(numfmt --to=iec "$(stat -c %s "$COMBINED")")"
+    else
+      echo "  WARNING: pruned temp failed JSON check — keeping original, removing temp"
+      rm -f "$TMP"
+    fi
+  else
+    echo "  WARNING: prune produced empty/failed output — keeping original, removing temp"
+    rm -f "$TMP"
+  fi
 fi
 
 # ── 6. Prune snapshots older than N days ─────────────────────────────────
