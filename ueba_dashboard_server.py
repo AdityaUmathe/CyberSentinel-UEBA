@@ -504,6 +504,10 @@ def save_fps() -> None:
         tmp.replace(FP_FILE)
     except Exception as e:
         print(f"[dashboard] failed to persist FPs to {FP_FILE}: {e}")
+    # FP state changed → cached aggregations now include alerts that should be
+    # filtered (or vice-versa). Drop them so the next request recomputes fresh and
+    # the analyst sees their FP mark take effect immediately, not after the TTL.
+    _invalidate_result_cache()
 
 
 def load_fp_patterns() -> None:
@@ -546,6 +550,7 @@ def save_fp_patterns() -> None:
         tmp.replace(FP_PATTERNS_FILE)
     except Exception as e:
         print(f"[dashboard] failed to persist FP patterns to {FP_PATTERNS_FILE}: {e}")
+    _invalidate_result_cache()
 
 
 def _alert_matches_pattern(alert: dict, pattern: dict) -> bool:
@@ -708,9 +713,21 @@ def _read_live_alerts(n: int | None = None) -> list:
 
 def _alert_ts(a: dict) -> datetime | None:
     """Best-effort timestamp for windowing/sorting: engine processed_at, else
-    source event_time. Mirrors the client-side timeline filter."""
+    source event_time. Mirrors the client-side timeline filter.
+
+    The parsed datetime is memoised on the alert dict under "__ts" because the
+    same dicts live for a long time in the archive/live caches and were being
+    re-parsed (datetime.fromisoformat) on every windowed request — hundreds of
+    thousands of ISO strings per API call. Parse once, reuse forever; only newly
+    appended alerts ever pay the parse. A separate sentinel distinguishes
+    "not computed yet" from a legitimately unparseable timestamp (cached as None)."""
+    cached = a.get("__ts", _TS_UNSET)
+    if cached is not _TS_UNSET:
+        return cached
     ueba = a.get("ueba") or {}
-    return _parse_iso(ueba.get("processed_at") or a.get("event_time"))
+    ts = _parse_iso(ueba.get("processed_at") or a.get("event_time"))
+    a["__ts"] = ts
+    return ts
 
 
 def _parse_archive_zip(path: Path) -> list | None:
@@ -783,6 +800,30 @@ def _read_archived_alerts(cutoff: datetime) -> list:
     return out
 
 
+# Sentinel for the per-alert timestamp memo in _alert_ts (None is a valid,
+# cached "unparseable" result, so it can't double as "not computed yet").
+_TS_UNSET = object()
+
+# ── Windowed snapshot cache (with thundering-herd protection) ────────────────
+# Building a window (merge archives+live, decorate, sort, cap) is the single
+# hottest path in the dashboard: every boot fires 5+ endpoints (stats/feed/users/
+# campaigns/agents/health) that each call load_alerts() for the SAME window, and
+# the 30s auto-refresh repeats it. Without coordination those requests rebuild
+# the same multi-hundred-thousand-row list *concurrently* — saturating every core
+# AND allocating N copies of the decorated list at once (which is exactly how a
+# restart-time burst ballooned RSS toward OOM). Two-part fix:
+#   1. Memoise the built window keyed by `hours` for a short TTL.
+#   2. Serialise the *build* behind the lock so a cold-cache burst does ONE build
+#      and every other caller waits for it and reuses the snapshot — never N
+#      parallel builds. The lock is held during the build; that's intentional
+#      (callers should wait, not pile up). TTL is well under the 30s refresh and
+#      the live SSE stream still pushes new alerts in real time, so the brief
+#      staleness is invisible.
+_window_cache: dict = {}        # hours -> (built_at, list, window_total)
+_window_cache_lock = __import__("threading").RLock()
+_WINDOW_TTL = 5.0               # seconds
+
+
 def _read_alerts_windowed(hours: int, n: int | None = None) -> list:
     """Live + archived alerts within the requested window, oldest-first, capped
     at `max_feed_alerts` (most-recent kept). hours==0 → full `history_days`.
@@ -790,25 +831,56 @@ def _read_alerts_windowed(hours: int, n: int | None = None) -> list:
     Records with an unparseable timestamp are kept (never silently dropped) and
     sorted as oldest. The pre-cap in-window total is stashed in
     `_last_window_total` so /api/stats can tell the analyst when a wide window
-    was truncated."""
-    global _last_window_total
-    history_days = int(CFG.get("history_days", 95) or 95)
-    cap = int(CFG.get("max_feed_alerts", 10000) or 10000)
-    now = datetime.now(timezone.utc)
-    cutoff = now - (timedelta(hours=hours) if hours and hours > 0
-                    else timedelta(days=history_days))
+    was truncated.
 
-    combined = _read_archived_alerts(cutoff) + _read_live_alerts(n)
-    decorated = []
-    for a in combined:
-        ts = _alert_ts(a)
-        if ts is None or ts >= cutoff:
-            decorated.append((ts or _MIN_DT, a))
-    decorated.sort(key=lambda t: t[0])
-    _last_window_total = len(decorated)
-    if len(decorated) > cap:
-        decorated = decorated[-cap:]
-    return [a for _, a in decorated]
+    Results are memoised for `_WINDOW_TTL` seconds keyed by `hours`, and the build
+    is serialised (see the herd note above) so a burst of concurrent endpoints
+    reuses one snapshot instead of each rebuilding it. `n` is not part of the key:
+    every API caller uses the default (max_alerts), so it never varies."""
+    global _last_window_total
+
+    def _fresh():
+        hit = _window_cache.get(hours)
+        if hit is not None and (time.time() - hit[0]) < _WINDOW_TTL:
+            return hit
+        return None
+
+    # Fast path: a fresh snapshot already exists — return it without building.
+    with _window_cache_lock:
+        hit = _fresh()
+        if hit is not None:
+            _last_window_total = hit[2]
+            return hit[1]
+
+        # Cold/stale. Build while holding the lock so concurrent callers block
+        # here and then fall through to reuse what we store — one build, not N.
+        # (Re-check first in case we raced another builder that just finished.)
+        hit = _fresh()
+        if hit is not None:
+            _last_window_total = hit[2]
+            return hit[1]
+
+        history_days = int(CFG.get("history_days", 95) or 95)
+        cap = int(CFG.get("max_feed_alerts", 10000) or 10000)
+        now = datetime.now(timezone.utc)
+        cutoff = now - (timedelta(hours=hours) if hours and hours > 0
+                        else timedelta(days=history_days))
+
+        combined = _read_archived_alerts(cutoff) + _read_live_alerts(n)
+        decorated = []
+        for a in combined:
+            ts = _alert_ts(a)
+            if ts is None or ts >= cutoff:
+                decorated.append((ts or _MIN_DT, a))
+        decorated.sort(key=lambda t: t[0])
+        window_total = len(decorated)
+        if len(decorated) > cap:
+            decorated = decorated[-cap:]
+        result = [a for _, a in decorated]
+
+        _last_window_total = window_total
+        _window_cache[hours] = (time.time(), result, window_total)
+        return result
 
 
 def _read_all_alerts_for_lookup() -> list:
@@ -868,6 +940,131 @@ def _wants_include_fp() -> bool:
     return v in ("1", "true", "yes", "y")
 
 
+# ── Endpoint result cache + background warmer ────────────────────────────────
+# The window snapshot cache (above) makes *loading* a window cheap, but each
+# heavy endpoint (stats/users/campaigns/agents/feed) still iterates the whole
+# window to AGGREGATE its answer — and for the wide "All" window that's 300k+
+# alerts per endpoint. Python's GIL serialises those CPU-bound aggregations, so a
+# boot burst of 5 endpoints runs them back-to-back (~13s on "All"). Two parts:
+#   1. Cache each endpoint's computed JSON value keyed by (name, hours, include_fp)
+#      so a refresh / extra browser tab / multi-analyst fleet returns instantly.
+#   2. A background warmer recomputes the cache for *actively-viewed* windows every
+#      few seconds, so a window someone is watching is always pre-aggregated and
+#      its next load is instant — the heavy aggregation happens off the request
+#      path. Idle windows stop being refreshed and age out, so we never burn CPU
+#      aggregating a window nobody is looking at.
+# Staleness is bounded by the warm interval (seconds) and is invisible: the feed
+# table auto-refreshes every 30s and the live SSE stream pushes new alerts in
+# real time regardless.
+# Reads of _result_cache never block: dict get/set are atomic under the GIL, and
+# readers serve the last cached value while the warmer refreshes it in the
+# background. Builds are coordinated by *per-key* locks so (a) two threads never
+# build the same key at once and (b) one slow endpoint's build never blocks a
+# different endpoint or window. The big shared alert list is built once by the
+# window cache (with its own herd lock), so concurrent per-endpoint aggregations
+# operate on that shared list and don't each duplicate it — memory stays bounded.
+_result_cache: dict = {}            # (name, hours, include_fp) -> (built_at, value)
+_active_windows: dict = {}          # (hours, include_fp) -> last_requested (epoch)
+_result_build_locks: dict = {}      # key -> Lock (one builder per key)
+_result_locks_guard = __import__("threading").Lock()
+_RESULT_TTL = 45.0                  # a value newer than this is served as-is
+_STALE_SERVE_MAX = 600.0            # serve an older value rather than block, up to this
+_RESULT_REFRESH_AGE = 18.0          # warmer rebuilds an entry only once it's older than this
+_WARM_TICK = 5.0                    # how often the warmer wakes to check freshness
+_ACTIVE_WINDOW_TTL = 180.0          # keep warming a window seen within this long
+_ENDPOINT_BUILDERS: dict = {}       # name -> builder(alerts) -> JSON value
+
+
+def _build_lock_for(key):
+    """Per-key build lock so only one thread (re)builds a given cache entry, while
+    other keys build freely in parallel."""
+    with _result_locks_guard:
+        lk = _result_build_locks.get(key)
+        if lk is None:
+            lk = __import__("threading").Lock()
+            _result_build_locks[key] = lk
+        return lk
+
+
+def _invalidate_result_cache() -> None:
+    """Drop all cached endpoint results (e.g. after a false-positive change) so the
+    next request recomputes against the new FP state instead of serving a stale
+    aggregation. Safe to call from any thread / request handler."""
+    _result_cache.clear()
+
+
+def _build_and_store(name: str, builder, hours: int, include_fp: bool):
+    """(Re)build one cache entry under its per-key lock and store it. Returns the
+    fresh value. If another thread built it while we waited for the lock, reuse
+    that instead of rebuilding."""
+    key = (name, hours, include_fp)
+    with _build_lock_for(key):
+        hit = _result_cache.get(key)
+        if hit is not None and (time.time() - hit[0]) < _RESULT_TTL:
+            return hit[1]
+        alerts = load_alerts(include_fp=include_fp, hours=hours)
+        value = builder(alerts)
+        _result_cache[key] = (time.time(), value)
+        return value
+
+
+def _endpoint_result(name: str, builder, hours: int, include_fp: bool):
+    """Return the cached value for (name, hours, include_fp). Fresh hits return
+    instantly with no lock. A slightly-stale value is also returned immediately
+    (the warmer keeps active windows fresh in the background); we only block to
+    build when there is no usable cached value at all (first-ever request for the
+    window, or right after a cache invalidation)."""
+    key = (name, hours, include_fp)
+    now = time.time()
+    _active_windows[(hours, include_fp)] = now
+    hit = _result_cache.get(key)
+    if hit is not None:
+        age = now - hit[0]
+        if age < _RESULT_TTL:
+            return hit[1]                       # fresh — instant
+        if age < _STALE_SERVE_MAX:
+            return hit[1]                       # serve stale now; warmer will refresh
+    # No usable cached value → build it (per-key lock; concurrent callers for the
+    # same key wait once and then reuse).
+    return _build_and_store(name, builder, hours, include_fp)
+
+
+def _cached_endpoint(name: str, builder):
+    """Request-context entry point: resolve the window from the request, register
+    it as active (so the warmer keeps it hot), and return the cached/built value."""
+    return _endpoint_result(name, builder, _window_hours(), _wants_include_fp())
+
+
+def _warm_results_loop() -> None:
+    """Daemon: keep the result cache hot for windows analysts are actively viewing
+    so their loads stay instant. The heavy aggregation runs here, off the request
+    path; each (endpoint, window) is rebuilt under its own per-key lock so it never
+    blocks a live request for a different endpoint/window."""
+    while True:
+        try:
+            time.sleep(_WARM_TICK)
+            now = time.time()
+            windows = [w for w, seen in list(_active_windows.items())
+                       if (now - seen) < _ACTIVE_WINDOW_TTL]
+            for (hours, include_fp) in windows:
+                for name, builder in list(_ENDPOINT_BUILDERS.items()):
+                    try:
+                        key = (name, hours, include_fp)
+                        # Only rebuild entries that are getting stale — skip ones
+                        # still fresh so the warmer doesn't peg a core recomputing
+                        # the heavy "All" window every tick for no benefit.
+                        hit = _result_cache.get(key)
+                        if hit is not None and (now - hit[0]) < _RESULT_REFRESH_AGE:
+                            continue
+                        with _build_lock_for(key):
+                            alerts = load_alerts(include_fp=include_fp, hours=hours)
+                            _result_cache[key] = (time.time(), builder(alerts))
+                    except Exception:
+                        pass  # never let one bad build kill the warmer
+        except Exception:
+            time.sleep(_WARM_TICK)
+
+
 def _looks_like_request(v) -> bool:
     """True if a string looks like an HTTP request path / URL / query rather than
     a username. Web-attack decoders (SQLi/XSS scans on /search.php?q=...) put the
@@ -884,6 +1081,23 @@ def _looks_like_request(v) -> bool:
 
 
 def get_user(alert: dict) -> str:
+    """Resolve the most meaningful username from an alert, memoised on the dict.
+
+    The resolution (below) is non-trivial — many nested lookups plus a regex
+    request-shape check at every step — and it's called once per alert by stats,
+    users, campaigns, agents AND the per-user/agent drilldowns, which each scan
+    the whole window. Caching the result on the dict (`__user`) makes a repeat
+    scan a dict.get instead of re-resolving 300k+ times. Same dicts live in the
+    alert caches, so the memo persists; only new alerts pay the resolution."""
+    cached = alert.get("__user", _TS_UNSET)
+    if cached is not _TS_UNSET:
+        return cached
+    u = _resolve_user(alert)
+    alert["__user"] = u
+    return u
+
+
+def _resolve_user(alert: dict) -> str:
     """Resolve the most meaningful username from an alert.
     Priority: subject.name > raw_event user fields > object.name (if not a URL)
               > host/agent name > subject.ip > ae model (if personal) > 'unknown'
@@ -940,56 +1154,64 @@ def get_user(alert: dict) -> str:
 @app.route("/api/stats")
 def stats():
     """Overall stats for the stats overview panel."""
-    alerts = load_alerts(include_fp=_wants_include_fp())
+    return jsonify(_cached_endpoint("stats", _build_stats))
+
+
+def _build_stats(alerts):
     if not alerts:
-        return jsonify({
+        return {
             "total_alerts": 0, "highly_anomalous": 0, "anomalous": 0,
             "suspicious": 0, "campaigns": 0, "suppressed_noise": 0,
             "unique_users": 0, "alert_rate_1h": 0, "top_reasons": []
-        })
+        }
 
     now = datetime.now(timezone.utc)
     one_hour_ago = now - timedelta(hours=1)
 
-    total        = len(alerts)
-    highly       = sum(1 for a in alerts if a.get("ueba", {}).get("risk_verdict") == "highly_anomalous")
-    anomalous    = sum(1 for a in alerts if a.get("ueba", {}).get("risk_verdict") == "anomalous")
-    suspicious   = sum(1 for a in alerts if a.get("ueba", {}).get("risk_verdict") == "suspicious")
-    campaigns    = len({a.get("ueba", {}).get("campaign_id") for a in alerts
-                        if a.get("ueba", {}).get("campaign_id")})
-    unique_users = len({get_user(a) for a in alerts})
-
-    recent = []
-    for a in alerts:
-        try:
-            t = datetime.fromisoformat(a.get("ueba", {}).get("processed_at", ""))
-            if t >= one_hour_ago:
-                recent.append(a)
-        except Exception:
-            pass
-
+    # Single pass over the window (was 7 separate passes) — for the wide "All"
+    # window that's 300k+ alerts, so collapsing the passes makes this ~7x cheaper
+    # and keeps the background warmer light.
+    total = len(alerts)
+    highly = anomalous = suspicious = alert_rate_1h = 0
+    campaign_ids: set = set()
+    users_seen: set = set()
     reason_counts: dict = defaultdict(int)
     for a in alerts:
-        for r in (a.get("ueba", {}).get("anomaly_reasons") or []):
+        ueba = a.get("ueba", {}) or {}
+        verdict = ueba.get("risk_verdict")
+        if verdict == "highly_anomalous": highly += 1
+        elif verdict == "anomalous":      anomalous += 1
+        elif verdict == "suspicious":     suspicious += 1
+        cid = ueba.get("campaign_id")
+        if cid:
+            campaign_ids.add(cid)
+        users_seen.add(get_user(a))
+        for r in (ueba.get("anomaly_reasons") or []):
             reason_counts[r] += 1
-    top_reasons = sorted(reason_counts.items(), key=lambda x: -x[1])[:5]
+        ts = _alert_ts(a)   # memoised parse
+        if ts is not None and ts >= one_hour_ago:
+            alert_rate_1h += 1
+
+    campaigns    = len(campaign_ids)
+    unique_users = len(users_seen)
+    top_reasons  = sorted(reason_counts.items(), key=lambda x: -x[1])[:5]
 
     cap = int(CFG.get("max_feed_alerts", 10000) or 10000)
-    return jsonify({
+    return {
         "total_alerts":    total,
         "highly_anomalous": highly,
         "anomalous":       anomalous,
         "suspicious":      suspicious,
         "campaigns":       campaigns,
         "unique_users":    unique_users,
-        "alert_rate_1h":   len(recent),
+        "alert_rate_1h":   alert_rate_1h,
         "top_reasons":     [{"reason": r, "count": c} for r, c in top_reasons],
         # Window truncation honesty: when the selected window holds more alerts
         # than the cap, the feed shows the most-recent `cap` and the UI says so.
         "window_total":    _last_window_total,
         "window_cap":      cap,
         "window_capped":   _last_window_total > cap,
-    })
+    }
 
 
 def _alert_to_feed_item(a: dict, include_evidence: bool = True) -> dict:
@@ -1042,13 +1264,16 @@ def feed():
     can return up to max_feed_alerts rows without shipping a multi-hundred-MB
     payload; the dashboard lazy-loads each alert's evidence via /api/evidence.
     """
-    alerts = load_alerts(include_fp=_wants_include_fp())
+    return jsonify(_cached_endpoint("feed", _build_feed))
+
+
+def _build_feed(alerts):
     # Cap the table payload to the newest rows so a high-volume window doesn't
     # ship tens of MB and freeze the browser. alerts is oldest-first, so the
     # newest slice is the tail; reverse it to newest-first for the table.
     cap = int(CFG.get("feed_row_cap", 5000) or 5000)
     recent = alerts[-cap:] if len(alerts) > cap else alerts
-    return jsonify([_alert_to_feed_item(a, include_evidence=False) for a in reversed(recent)])
+    return [_alert_to_feed_item(a, include_evidence=False) for a in reversed(recent)]
 
 
 @app.route("/api/evidence/<path:event_id>")
@@ -1074,7 +1299,10 @@ def alert_evidence(event_id):
 @app.route("/api/users")
 def users():
     """User risk leaderboard — top 20 riskiest users."""
-    alerts = load_alerts(include_fp=_wants_include_fp())
+    return jsonify(_cached_endpoint("users", _build_users))
+
+
+def _build_users(alerts):
     user_stats: dict = defaultdict(lambda: {
         "count": 0, "max_score": 0.0, "verdicts": defaultdict(int),
         "reasons": defaultdict(int), "last_seen": "", "hosts": set()
@@ -1115,13 +1343,16 @@ def users():
         })
 
     leaderboard.sort(key=lambda x: -x["risk_index"])
-    return jsonify(leaderboard[:20])
+    return leaderboard[:20]
 
 
 @app.route("/api/campaigns")
 def campaigns():
     """Campaign timeline data."""
-    alerts = load_alerts(include_fp=_wants_include_fp())
+    return jsonify(_cached_endpoint("campaigns", _build_campaigns))
+
+
+def _build_campaigns(alerts):
     campaign_data: dict = defaultdict(lambda: {
         "alerts": [], "users": set(), "hosts": set(),
         "first_seen": "", "last_seen": "", "verdicts": defaultdict(int),
@@ -1175,7 +1406,7 @@ def campaigns():
         })
 
     result.sort(key=lambda x: x["last_seen"], reverse=True)
-    return jsonify(result)
+    return result
 
 
 # Verdict severity ordering, used to pick an incident's worst verdict.
@@ -1291,6 +1522,10 @@ def incidents():
 @app.route("/api/agents")
 def agents():
     """Agent (endpoint) summary — all registered agents, merged with alert stats."""
+    return jsonify(_cached_endpoint("agents", _build_agents))
+
+
+def _build_agents(alerts):
     registry: list = []
     if AGENTS_REGISTRY.exists():
         try:
@@ -1298,7 +1533,6 @@ def agents():
         except Exception:
             pass
 
-    alerts = load_alerts(include_fp=_wants_include_fp())
     agent_stats: dict = defaultdict(lambda: {
         "alert_count": 0, "max_score": 0.0,
         "verdicts": defaultdict(int), "users": set(),
@@ -1377,30 +1611,49 @@ def agents():
         })
 
     result.sort(key=lambda x: (-x["highly_anomalous"], -x["max_score"]))
-    return jsonify(result)
+    return result
+
+
+# Register the heavy endpoint builders so the background warmer keeps the result
+# cache hot for actively-viewed windows (see _warm_results_loop).
+_ENDPOINT_BUILDERS.update({
+    "stats":     _build_stats,
+    "feed":      _build_feed,
+    "users":     _build_users,
+    "campaigns": _build_campaigns,
+    "agents":    _build_agents,
+})
 
 
 @app.route("/api/agent/<agent_name>")
 def agent_alerts(agent_name):
-    """All alerts for a specific agent, newest first."""
-    alerts = load_alerts(include_fp=_wants_include_fp())
+    """All alerts for a specific agent, newest first.
+
+    Evidence is omitted (include_evidence=False) — exactly like /api/feed — so a
+    noisy host (tens of thousands of alerts) doesn't ship a 100MB+ payload. The
+    drilldown table lazy-loads each row's evidence on expand via /api/evidence.
+    """
     out = []
-    for a in reversed(alerts):
+    for a in reversed(load_alerts(include_fp=_wants_include_fp())):
         if ((a.get("host", {}) or {}).get("name", "")) != agent_name:
             continue
-        out.append(_alert_to_feed_item(a))
+        out.append(_alert_to_feed_item(a, include_evidence=False))
     return jsonify(out)
 
 
 @app.route("/api/user/<path:username>")
 def user_alerts(username):
-    """All alerts for a specific user, newest first."""
-    alerts = load_alerts(include_fp=_wants_include_fp())
+    """All alerts for a specific user, newest first.
+
+    Evidence is omitted (see agent_alerts) — a single noisy entity can have 80k+
+    alerts, and shipping each one's evidence blob made this a ~200MB / 6s response.
+    The table lazy-loads evidence per row on expand via /api/evidence.
+    """
     out = []
-    for a in reversed(alerts):
+    for a in reversed(load_alerts(include_fp=_wants_include_fp())):
         if get_user(a) != username:
             continue
-        out.append(_alert_to_feed_item(a))
+        out.append(_alert_to_feed_item(a, include_evidence=False))
     return jsonify(out)
 
 
@@ -1636,18 +1889,17 @@ def health():
     newest_iso    = None
     newest_dt     = None
     for a in alerts:
-        ts = (a.get("ueba", {}) or {}).get("processed_at") or a.get("event_time") or ""
-        try:
-            d = datetime.fromisoformat(ts.replace("Z", "+00:00")) if ts else None
-        except Exception:
-            d = None
+        # Reuse the memoised timestamp (_alert_ts caches the parse on the dict)
+        # instead of re-parsing every ISO string here — health runs over the full
+        # window and was paying a second full parse pass on every call.
+        d = _alert_ts(a)
         if d is None:
             continue
         if d >= one_hour_ago: alerts_1h  += 1
         if d >= one_day_ago:  alerts_24h += 1
         if newest_dt is None or d > newest_dt:
             newest_dt  = d
-            newest_iso = ts
+            newest_iso = (a.get("ueba", {}) or {}).get("processed_at") or a.get("event_time") or ""
 
     try:
         file_size = ALERTS_FILE.stat().st_size if ALERTS_FILE.exists() else 0
@@ -2204,10 +2456,35 @@ def _warm_archive_cache() -> None:
     except Exception as e:  # never let warm-up crash startup
         print(f"[dashboard] archive cache warm-up failed ({e}) — loading lazily")
 
+    # Now that the alert caches are hot, seed the endpoint result cache for the
+    # windows analysts land on first (All=0 and 24h) so the very first dashboard
+    # load after a restart is instant instead of paying the cold aggregation. The
+    # background result-warmer then keeps these (and any others viewed) fresh.
+    for window in ((0, False), (24, False)):
+        _active_windows[window] = time.time()
+    try:
+        t = time.time()
+        for (hours, include_fp) in ((0, False), (24, False)):
+            for name, builder in list(_ENDPOINT_BUILDERS.items()):
+                try:
+                    _build_and_store(name, builder, hours, include_fp)
+                except Exception:
+                    pass
+        print(f"[dashboard] result cache pre-warmed (All + 24h) in {time.time() - t:.1f}s")
+    except Exception as e:
+        print(f"[dashboard] result cache pre-warm failed ({e}) — building lazily")
+
 
 def _start_archive_warm_thread() -> None:
     import threading
     threading.Thread(target=_warm_archive_cache, name="archive-warm", daemon=True).start()
+
+
+def _start_result_warm_thread() -> None:
+    """Keep the endpoint result cache hot for actively-viewed windows so loads
+    stay instant (the heavy aggregation runs off the request path)."""
+    import threading
+    threading.Thread(target=_warm_results_loop, name="result-warm", daemon=True).start()
 
 
 def main() -> None:
@@ -2244,6 +2521,7 @@ def main() -> None:
           f"(history {CFG.get('history_days')}d, feed cap {CFG.get('max_feed_alerts')})")
     _start_agent_sync_thread()
     _start_archive_warm_thread()
+    _start_result_warm_thread()
     # threaded=True: serve requests concurrently so one slow scan (e.g. a wide
     # hours=N feed query over the multi-GB enriched file) can't block every other
     # endpoint and freeze the whole dashboard.

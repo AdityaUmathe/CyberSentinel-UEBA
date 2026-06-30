@@ -28,7 +28,7 @@ export async function loadUserDetail(userName, { silent = false } = {}) {
 
   let alerts = [];
   try {
-    alerts = await fetch("/api/user/" + encodeURIComponent(userName)).then((r) => r.json());
+    alerts = await fetch("/api/user/" + encodeURIComponent(userName) + "?hours=" + (state.timelineHours || 0)).then((r) => r.json());
   } catch {
     if (!silent) body.innerHTML = '<div class="empty-state"><p>FAILED TO LOAD USER</p></div>';
     return;
@@ -45,8 +45,16 @@ export async function loadUserDetail(userName, { silent = false } = {}) {
   const critCount = alerts.filter((a) => a.verdict === "highly_anomalous").length;
   const anomCount = alerts.filter((a) => a.verdict === "anomalous").length;
   const suspCount = alerts.filter((a) => a.verdict === "suspicious").length;
-  const maxScore  = Math.max(...alerts.map((a) => a.score || 0));
+  // reduce, not Math.max(...spread): a noisy entity can have 80k+ alerts and
+  // spreading that many args into Math.max overflows the call stack.
+  const maxScore  = alerts.reduce((m, a) => Math.max(m, a.score || 0), 0);
   const total     = alerts.length;
+  // Render only the newest ROW_CAP rows in the table — aggregates above use the
+  // full set, so counts/charts stay exact, but the DOM never tries to lay out
+  // tens of thousands of <tr> (which froze the browser). Evidence is lazy-loaded
+  // per row on expand, so capping the rows costs no data.
+  const ROW_CAP   = 5000;
+  const shownRows = alerts.length > ROW_CAP ? alerts.slice(0, ROW_CAP) : alerts;
   const score     = Math.min(100, Math.round(
     (critCount / Math.max(total, 1)) * 60 +
     (anomCount / Math.max(total, 1)) * 20 +
@@ -156,18 +164,19 @@ export async function loadUserDetail(userName, { silent = false } = {}) {
       </div>
 
       <div class="ep-chart-card" style="margin-top:14px;">
-        <div class="ep-chart-title">All Events (${alerts.length})</div>
+        <div class="ep-chart-title">All Events (${total})${shownRows.length < total
+          ? ` <span style="color:var(--text3);font-weight:400;font-size:11px">— showing newest ${shownRows.length.toLocaleString()}</span>` : ""}</div>
         <div class="feed-table-wrap" style="max-height:420px;">
           <table>
             <thead><tr><th>Time</th><th>Host</th><th>Verdict</th><th>Score</th><th>Reasons</th><th>Campaign</th><th>Signature</th></tr></thead>
-            <tbody>${feedRows(alerts, 7, "usr-")}</tbody>
+            <tbody>${feedRows(shownRows, 7, "usr-")}</tbody>
           </table>
         </div>
       </div>
     </div>`;
 
-  // Collapse any auto-expanded evidence rows
-  alerts.forEach((a) => {
+  // Collapse any auto-expanded evidence rows (only the rows we actually rendered)
+  shownRows.forEach((a) => {
     const id = "ev-usr-" + (a.event_id || a.processed_at + a.user);
     const el = document.getElementById(id);
     if (el) el.style.display = "none";

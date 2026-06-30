@@ -93,7 +93,7 @@ export async function loadAgentDetail(agentName, { silent = false } = {}) {
   }
   let alerts = [];
   try {
-    alerts = await fetch("/api/agent/" + encodeURIComponent(agentName)).then((r) => r.json());
+    alerts = await fetch("/api/agent/" + encodeURIComponent(agentName) + "?hours=" + (state.timelineHours || 0)).then((r) => r.json());
   } catch (e) {
     if (!silent) body.innerHTML = '<div class="empty-state"><p>FAILED TO LOAD</p></div>';
     return;
@@ -115,7 +115,14 @@ export async function loadAgentDetail(agentName, { silent = false } = {}) {
   const critCount = alerts.filter((a) => a.verdict === "highly_anomalous").length;
   const anomCount = alerts.filter((a) => a.verdict === "anomalous").length;
   const suspCount = alerts.filter((a) => a.verdict === "suspicious").length;
-  const maxScore  = Math.max(...alerts.map((a) => a.score || 0));
+  // reduce, not Math.max(...spread): a noisy host can have 80k+ alerts and
+  // spreading that many args overflows the call stack.
+  const maxScore  = alerts.reduce((m, a) => Math.max(m, a.score || 0), 0);
+  // Render only the newest ROW_CAP rows (aggregates/charts still use the full
+  // set) so the table never lays out tens of thousands of <tr>. Evidence is
+  // lazy-loaded per row on expand, so the cap drops no data.
+  const ROW_CAP   = 5000;
+  const shownRows = alerts.length > ROW_CAP ? alerts.slice(0, ROW_CAP) : alerts;
 
   // The Overview gauge stays as the all-agents average (set by updateGauge in
   // renderDashboard) — we don't override it with the selected agent's score.
@@ -335,15 +342,17 @@ export async function loadAgentDetail(agentName, { silent = false } = {}) {
       </div>
     </div>
     <div id="agent-pane-events" class="agent-pane" style="display:none;">
+      ${shownRows.length < alerts.length
+        ? `<div style="color:var(--text3);font-family:var(--mono2);font-size:11px;padding:6px 2px">Showing newest ${shownRows.length.toLocaleString()} of ${alerts.length.toLocaleString()} events</div>` : ""}
       <div class="feed-table-wrap" style="max-height:520px;">
         <table>
           <thead><tr><th>Time</th><th>User</th><th>Verdict</th><th>Score</th><th>Reasons</th><th>Campaign</th><th>Signature</th></tr></thead>
-          <tbody>${feedRows(alerts, 7, "ag-")}</tbody>
+          <tbody>${feedRows(shownRows, 7, "ag-")}</tbody>
         </table>
       </div>
     </div>`;
 
-  alerts.forEach((a) => {
+  shownRows.forEach((a) => {
     const id = "ev-ag-" + (a.event_id || a.processed_at + a.user);
     const el = document.getElementById(id);
     if (el) el.style.display = "none";
