@@ -273,6 +273,45 @@ nohup python3 ueba_dashboard_server.py > logs/dashboard.log 2>&1 &
 
 **Dashboard URL:** `http://<GPU_SERVER_IP>:3026`
 
+### Managing Services (systemd — current method)
+
+The engine, dashboard, and sync bridge now run as **systemd units** on the GPU server (98),
+so they auto-start on boot and restart on crash. **Prefer these commands over the manual
+`nohup` block above** — that legacy method is only for one-off debugging.
+
+| Service            | systemd unit     |
+| ------------------ | ---------------- |
+| Detection engine   | `ueba-engine`    |
+| Dashboard (:3026)  | `ueba-dashboard` |
+| Feed sync bridge   | `ueba-bridge`    |
+
+**Start / stop / restart the engine** (run as root on 98):
+
+```bash
+systemctl stop    ueba-engine     # stop the engine
+systemctl start   ueba-engine     # start the engine
+systemctl restart ueba-engine     # restart (stop + start)
+```
+
+**Check state and logs:**
+
+```bash
+systemctl status    ueba-engine   # state + recent log lines
+systemctl is-active ueba-engine   # prints: active / inactive
+journalctl -u ueba-engine -f      # live logs via journald
+tail -f /root/NEW_DRIVE/aditya_ueba/logs/ueba_engine.stdout.log   # app stdout log
+```
+
+The same `start` / `stop` / `restart` / `status` verbs work for `ueba-dashboard` and
+`ueba-bridge` — just swap the unit name.
+
+> **Important gotchas**
+> - The units have `Restart=` set, so `kill`/`pkill` on the *process* just makes systemd
+>   respawn it. To actually stop a service you must stop the **unit**: `systemctl stop <unit>`.
+> - A nightly `00:05` cron (`ueba_rotate.sh`) and the Sunday retrain both run
+>   `systemctl start ueba-engine` at the end. So an engine you stopped may be started
+>   again by them — if you need it to stay down, disable that cron too.
+
 ### Status Check
 
 ```bash
