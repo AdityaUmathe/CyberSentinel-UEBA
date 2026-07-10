@@ -38,18 +38,12 @@ log "=== UEBA Sync Bridge Started (rotated-file mode) ==="
 log "  SOURCE DIR : ${SOC_HOST}:${SOC_ENRICHED_DIR}"
 log "  LOCAL FILE : ${LOCAL_ENRICHED}"
 
-# ── PUSH loop
-push_loop() {
-    while true; do
-        sleep 5
-        rsync -q --append --inplace \
-            -e "ssh ${SSH_OPTS}" \
-            "$ALERTS_SRC" "$ALERTS_DST" 2>/dev/null || \
-            log "PUSH ERROR: rsync to 222 failed"
-    done
-}
-push_loop &
-PUSH_PID=$!
+# ── PUSH loop — DISABLED 2026-07-10: the dashboard runs on 98 itself now, so
+# there is no need to ship ueba_alerts.jsonl back to the decommissioned SOC
+# box. The push only ever produced perpetual "PUSH ERROR: rsync to 222
+# failed" log noise (the target was unwritable). Kept PUSH_PID defined so the
+# set -u cleanup/log references stay valid.
+PUSH_PID=""
 
 # ── STATS loop
 # Note: TAIL_PID is set by the main loop *after* this subshell forks, so the
