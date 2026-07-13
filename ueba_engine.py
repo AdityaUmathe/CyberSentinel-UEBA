@@ -32,6 +32,7 @@ import logging.handlers
 import os
 import signal
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -451,6 +452,15 @@ class UEBAEngine:
         self.output_path = output_path
         self.running     = False
 
+        # Alert-file coordination between this engine's write loop and the
+        # clusterer thread's campaign-ID patcher (which atomically os.replace()s
+        # the alerts file). The lock makes the patcher's read+replace mutually
+        # exclusive with alert writes, so an alert is never appended to an inode
+        # the patcher is about to unlink (a silent lost-write). The flag tells
+        # the writer to reopen the new inode before its next write.
+        self._reopen_flag = threading.Event()
+        self._alert_write_lock = threading.Lock()
+
         # Stats
         self.stats = {
             "total_processed": 0,
@@ -671,12 +681,9 @@ class UEBAEngine:
         last_stat_log = time.time()
         events_since_save = 0
 
-        # ── FIX: open output file as a plain handle (not with-block)
-        # so we can reopen it after _patch_campaign_ids does its atomic swap.
-        # Using a with-block meant the fd stayed bound to the old inode
-        # after os.replace() — all writes silently went to a ghost file.
-        import threading
-        self._reopen_flag = threading.Event()
+        # Open output file as a plain handle (not a with-block) so we can reopen
+        # it after _patch_campaign_ids does its atomic swap. The reopen now
+        # happens at write time under _alert_write_lock (see the alert-write block).
         out_file = open(self.output_path, "a", encoding="utf-8")
         try:
             with open(self.input_path, "r", encoding="utf-8",
@@ -695,16 +702,6 @@ class UEBAEngine:
                 partial_line = ""
 
                 while self.running:
-                    # ── Reopen output file if campaign patcher swapped it ──
-                    if self._reopen_flag.is_set():
-                        try:
-                            out_file.close()
-                        except Exception:
-                            pass
-                        out_file = open(self.output_path, "a", encoding="utf-8")
-                        self._reopen_flag.clear()
-                        log.debug("Output file handle reopened after campaign swap")
-
                     chunk = in_file.read(65536)  # 64 KB at a time
 
                     if not chunk:
@@ -773,8 +770,20 @@ class UEBAEngine:
                             else:
                                 self.stats["total_alerts"] += 1
                                 line_out = json.dumps(result, ensure_ascii=False)
-                                out_file.write(line_out + "\n")
-                                out_file.flush()
+                                # Reopen (if the patcher swapped the file) and write
+                                # under the lock, so an alert is never written to an
+                                # inode the patcher is about to unlink (lost-write race).
+                                with self._alert_write_lock:
+                                    if self._reopen_flag.is_set():
+                                        try:
+                                            out_file.close()
+                                        except Exception:
+                                            pass
+                                        out_file = open(self.output_path, "a",
+                                                        encoding="utf-8")
+                                        self._reopen_flag.clear()
+                                    out_file.write(line_out + "\n")
+                                    out_file.flush()
 
                                 # Get actual username for log display
                                 _ae_model = result["ueba"].get("raw_scores", {}) \
@@ -818,6 +827,18 @@ class UEBAEngine:
                         self._log_stats()
                         last_stat_log = now
 
+                # Loop exited (running=False on shutdown): persist the final read
+                # offset. Without this, an unclean stop (weekly retrain, crash, or
+                # manual restart) resumes from the last periodic save and
+                # reprocesses up to save_every events → duplicate alerts. (The
+                # daily rotate clears state separately, so it is unaffected.)
+                try:
+                    self.state.save(in_file.tell())
+                    log.info("Final read offset persisted at shutdown: %d",
+                             in_file.tell())
+                except Exception as e:
+                    log.warning("Could not persist final read offset: %s", e)
+
         except Exception:
             raise
         finally:
@@ -847,6 +868,11 @@ class UEBAEngine:
             return
         if not Path(self.output_path).exists():
             return
+        # Hold the alert-write lock across the whole read→replace so the engine's
+        # write loop cannot append to the file we are about to unlink (which would
+        # silently lose those alerts). Alert writes block briefly once per
+        # clustering interval; none are lost.
+        self._alert_write_lock.acquire()
         try:
             tmp_path = self.output_path + ".tmp"
             changed = 0
@@ -880,6 +906,8 @@ class UEBAEngine:
                 os.unlink(tmp_path)
         except Exception as e:
             log.error("Failed to patch campaign IDs: %s", e)
+        finally:
+            self._alert_write_lock.release()
 
 
     def _log_stats(self):
@@ -893,6 +921,10 @@ class UEBAEngine:
         # see the current pattern set rather than whatever was loaded the last
         # time an alert was scored (which may be far behind during quiet hours).
         self.fp_suppressor.refresh()
+        # Persist per-pattern hit counts so the dashboard's "Matched" column
+        # reflects real suppressions (the suppressed alerts never reach the
+        # alert file, so this sibling stats file is the only source of truth).
+        self.fp_suppressor.write_stats()
         fp_suppressed = self.stats.get("total_fp_suppressed", 0)
         log.info(
             "Stats | processed: %d | alerts: %d (%.2f%%) | "
