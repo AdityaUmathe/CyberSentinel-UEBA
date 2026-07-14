@@ -8,6 +8,7 @@
 import "./styles.css";
 import "./liquid-glass.css";   // iOS 26-style frosted-glass theme layer (cosmetic; remove to revert)
 import "./ui/border-glow.js";  // cursor-tracking gradient border glow on cards (cosmetic; remove to revert)
+import "./ui/dashboard-fx.js"; // KPI count-up + feed severity bars + sliding tab underline (cosmetic; remove to revert)
 
 import { state } from "./state.js";
 import { fetchAll, fetchIncidents, manualRefresh, markFP, unmarkFP, markCampaignFP, unmarkPatternFP } from "./api.js";

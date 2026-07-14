@@ -557,3 +557,41 @@ html.light .logo-sub {
   border: 0 !important;
   box-shadow: none !important;
 }
+
+/* ============================================================================
+   DASHBOARD FX — cosmetic polish paired with ui/dashboard-fx.js
+   (KPI count-up, feed severity accent bars, sliding nav underline).
+   ========================================================================== */
+
+/* 1. KPI numbers: fixed-width digits so count-up doesn't reflow/jitter */
+.banner-stat-value, #s-users { font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }
+
+/* 2. Severity accent bar on Alert-Feed rows (tagged by dashboard-fx.js from
+      each row's verdict badge). Drawn as an inset bar on the first cell. */
+tr.feed-row[data-sev="sev-critical"] > td:first-child { box-shadow: inset 3px 0 0 0 var(--red)    !important; }
+tr.feed-row[data-sev="sev-anom"]     > td:first-child { box-shadow: inset 3px 0 0 0 var(--orange) !important; }
+tr.feed-row[data-sev="sev-susp"]     > td:first-child { box-shadow: inset 3px 0 0 0 var(--yellow) !important; }
+
+/* 3. Sliding nav underline — replaces the hard border-bottom on the active tab
+      with an indicator that glides between tabs. */
+.tab.active { border-bottom-color: transparent !important; }
+.tab-underline {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  width: 0;
+  background: var(--accent);
+  border-radius: 2px 2px 0 0;
+  box-shadow: 0 0 8px rgba(0,212,255,0.65);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 1;
+  transition: transform 0.32s cubic-bezier(.4,0,.2,1),
+              width 0.32s cubic-bezier(.4,0,.2,1),
+              opacity 0.2s ease;
+}
+html.light .tab-underline { box-shadow: 0 0 8px rgba(0,136,187,0.5); }
+@media (prefers-reduced-motion: reduce) {
+  .tab-underline { transition: opacity 0.2s ease; }
+}
