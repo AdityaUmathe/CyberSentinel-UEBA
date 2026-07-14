@@ -107,10 +107,24 @@ function initNavUnderline() {
   requestAnimationFrame(move); // after first layout
 }
 
+/* ── 4. Live browser-tab badge — critical count in the <title> ────────────── */
+function initTitleBadge() {
+  const base = "CyberSentinel UEBA";
+  const el = document.getElementById("s-highly"); // HIGHLY ANOMALOUS / critical count
+  if (!el) return;
+  const update = () => {
+    const n = parseInt(String(el.textContent).replace(/,/g, ""), 10);
+    document.title = n > 0 ? `⚠ ${n.toLocaleString()} · ${base}` : base;
+  };
+  new MutationObserver(update).observe(el, { childList: true, characterData: true, subtree: true });
+  update();
+}
+
 function init() {
   initCountUp();
   initSeverityRows();
   initNavUnderline();
+  initTitleBadge();
 }
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", init);
