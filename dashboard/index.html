@@ -7,6 +7,23 @@
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Barlow+Condensed:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 </head>
 <body>
+<!-- Liquid-glass refraction filters (iOS 26 style). Displaces the backdrop with
+     fractal noise so glass surfaces bend/ripple the content behind them.
+     Referenced by liquid-glass.css via backdrop-filter: url(#lg-refract...). -->
+<svg width="0" height="0" style="position:absolute;pointer-events:none" aria-hidden="true">
+  <defs>
+    <filter id="lg-refract" x="-25%" y="-25%" width="150%" height="150%" color-interpolation-filters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency="0.011 0.013" numOctaves="2" seed="7" result="n"/>
+      <feGaussianBlur in="n" stdDeviation="1.3" result="nb"/>
+      <feDisplacementMap in="SourceGraphic" in2="nb" scale="42" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+    <filter id="lg-refract-soft" x="-25%" y="-25%" width="150%" height="150%" color-interpolation-filters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency="0.014 0.016" numOctaves="2" seed="4" result="n"/>
+      <feGaussianBlur in="n" stdDeviation="1.1" result="nb"/>
+      <feDisplacementMap in="SourceGraphic" in2="nb" scale="22" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+  </defs>
+</svg>
 <div id="toast-container"></div>
 
 <header>
@@ -14,7 +31,7 @@
     <img class="logo-img" src="/cybersentinel-logo.png" alt="CyberSentinel" width="40" height="40"/>
     <div>
       <div class="logo-text">CYBERSENTINEL</div>
-      <div class="logo-sub">UEBA</div>
+      <div class="logo-sub">USER · ENTITY · BEHAVIOR ANALYTICS</div>
     </div>
   </div>
   <div class="threat-ticker"><span class="ticker-live-label">◈ LIVE</span><div class="ticker-scroll-area"><span class="ticker-inner" id="ticker-text">Initializing threat feed...</span></div></div>
@@ -692,7 +709,7 @@
 <footer class="site-footer">
   <!-- Left: logo + divider + product name -->
   <div class="footer-left">
-    <img src="/vg-footer-logo.png" alt="Virtual Galaxy Infotech Pvt. Ltd." class="footer-vgipl-logo" />
+    <img src="/vglogo_white.png" alt="Virtual Galaxy Infotech Pvt. Ltd." class="footer-vgipl-logo" />
   </div>
 
   <!-- Center: copyright -->

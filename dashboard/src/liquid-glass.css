@@ -1,0 +1,559 @@
+/* ============================================================================
+   LIQUID GLASS — iOS 26-style frosted-glass theme layer  (cosmetic, 2026-07-13)
+   ---------------------------------------------------------------------------
+   Additive override, imported AFTER styles.css so it wins the cascade.
+   Pairs with the <svg><filter id="lg-refract"> defs in index.html.
+   To REVERT: remove `import "./liquid-glass.css";` in main.js, delete this file,
+   and remove the <svg> liquid-glass filter block from index.html.
+   ============================================================================ */
+
+/* ── Glass tokens ──────────────────────────────────────────────────────── */
+:root {
+  --lg-bg:        rgba(18, 27, 38, 0.42);
+  --lg-bg-strong: rgba(10, 16, 24, 0.55);
+  --lg-border:    rgba(255, 255, 255, 0.14);
+  --lg-rim:       rgba(255, 255, 255, 0.16);   /* subtle beveled top edge */
+  --lg-radius:    20px;
+  --lg-blur:      22px;
+  --lg-sat:       190%;
+  /* Layered gloss: a restrained top highlight + a faint sheen fading down.
+     Kept low so the top edge doesn't bloom white on non-Mac displays. */
+  --lg-gloss:
+     radial-gradient(120% 70% at 50% -22%,
+        rgba(255,255,255,0.07) 0%, rgba(255,255,255,0.02) 22%, transparent 44%),
+     linear-gradient(180deg,
+        rgba(255,255,255,0.035) 0%, rgba(255,255,255,0.01) 30%, transparent 54%);
+  /* Beveled glass edge (subtle top rim, hairline, faint inner sheen, inner base glow) */
+  --lg-bevel:
+     inset 0 1px 0 var(--lg-rim),
+     inset 0 0 0 1px rgba(255,255,255,0.04),
+     inset 0 10px 22px rgba(255,255,255,0.02),
+     inset 0 -10px 24px rgba(0,0,0,0.16);
+  --lg-float:     0 12px 40px rgba(0,0,0,0.45), 0 2px 8px rgba(0,0,0,0.30);
+  --lg-float-hi:  0 20px 56px rgba(0,0,0,0.55), 0 0 0 1px rgba(0,212,255,0.12);
+  --lg-refract:   url(#lg-refract);
+  --lg-refract-s: url(#lg-refract-soft);
+}
+
+/* Light theme → frosted white glass */
+html.light {
+  --lg-bg:        rgba(255, 255, 255, 0.42);
+  --lg-bg-strong: rgba(255, 255, 255, 0.60);
+  --lg-border:    rgba(255, 255, 255, 0.70);
+  --lg-rim:       rgba(255, 255, 255, 0.95);
+  --lg-gloss:
+     radial-gradient(135% 90% at 50% -18%,
+        rgba(255,255,255,0.75) 0%, rgba(255,255,255,0.20) 26%, transparent 52%),
+     linear-gradient(180deg,
+        rgba(255,255,255,0.45) 0%, rgba(255,255,255,0.10) 34%, transparent 60%);
+  --lg-bevel:
+     inset 0 1px 0 var(--lg-rim),
+     inset 0 0 0 1px rgba(255,255,255,0.5),
+     inset 0 14px 26px rgba(255,255,255,0.35),
+     inset 0 -10px 24px rgba(31,50,72,0.06);
+  --lg-float:     0 12px 36px rgba(31,50,72,0.16), 0 2px 8px rgba(31,50,72,0.10);
+  --lg-float-hi:  0 20px 52px rgba(31,50,72,0.22), 0 0 0 1px rgba(0,136,187,0.15);
+}
+
+/* ── Core surfaces: panels & stat tiles ───────────────────────────────── */
+.panel,
+.stat-card,
+.stat-banner {
+  background: var(--lg-gloss), var(--lg-bg) !important;
+  -webkit-backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat)) brightness(1.06) var(--lg-refract);
+          backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat)) brightness(1.06) var(--lg-refract);
+  border: 1px solid var(--lg-border) !important;
+  border-radius: var(--lg-radius) !important;
+  box-shadow: var(--lg-float), var(--lg-bevel) !important;
+}
+
+.panel-header {
+  background: linear-gradient(180deg, rgba(255,255,255,0.035), rgba(255,255,255,0)) !important;
+  border-bottom: 1px solid var(--lg-border) !important;
+  border-radius: var(--lg-radius) var(--lg-radius) 0 0 !important;
+  -webkit-backdrop-filter: none;
+          backdrop-filter: none;
+}
+
+.panel:hover,
+.stat-card:hover {
+  border-color: rgba(255,255,255,0.26) !important;
+  box-shadow: var(--lg-float-hi), var(--lg-bevel) !important;
+}
+.stat-card { transition: transform 0.25s cubic-bezier(.2,.8,.2,1), box-shadow 0.25s ease, border-color 0.25s ease !important; }
+.stat-card:hover { transform: translateY(-3px) scale(1.012); }
+
+/* ── Top bar & nav — deep floating glass ──────────────────────────────── */
+header {
+  background: var(--lg-gloss), var(--lg-bg-strong) !important;
+  -webkit-backdrop-filter: blur(30px) saturate(200%) brightness(1.05) var(--lg-refract-s);
+          backdrop-filter: blur(30px) saturate(200%) brightness(1.05) var(--lg-refract-s);
+  border-bottom: 1px solid var(--lg-border) !important;
+  box-shadow: 0 8px 34px rgba(0,0,0,0.40), inset 0 1px 0 var(--lg-rim), inset 0 -1px 0 rgba(255,255,255,0.06) !important;
+}
+nav {
+  background: var(--lg-gloss), var(--lg-bg) !important;
+  -webkit-backdrop-filter: blur(22px) saturate(180%) var(--lg-refract-s);
+          backdrop-filter: blur(22px) saturate(180%) var(--lg-refract-s);
+  border-bottom: 1px solid var(--lg-border) !important;
+}
+
+/* ── Capsule glass for pills & buttons (iOS pill radius) ──────────────── */
+.status-pill,
+.nav-pill,
+#refresh-btn,
+.theme-toggle,
+.tl-btn,
+.panel-badge {
+  background: var(--lg-gloss), var(--lg-bg) !important;
+  -webkit-backdrop-filter: blur(14px) saturate(170%) var(--lg-refract-s);
+          backdrop-filter: blur(14px) saturate(170%) var(--lg-refract-s);
+  border: 1px solid var(--lg-border) !important;
+  border-radius: 999px !important;
+  box-shadow: inset 0 1px 0 var(--lg-rim), inset 0 0 0 1px rgba(255,255,255,0.05), 0 3px 12px rgba(0,0,0,0.25) !important;
+  overflow: hidden;
+  position: relative;
+}
+#refresh-btn:hover,
+.tl-btn:hover,
+.theme-toggle:hover {
+  border-color: rgba(0,212,255,0.40) !important;
+  box-shadow: inset 0 1px 0 var(--lg-rim), 0 5px 18px rgba(0,212,255,0.18) !important;
+}
+.tl-btn.active {
+  background: var(--lg-gloss), rgba(0,212,255,0.16) !important;
+  border-color: rgba(0,212,255,0.45) !important;
+  color: var(--accent) !important;
+}
+
+/* Active tab — soft glass capsule behind the label */
+.tab.active {
+  background: linear-gradient(180deg, rgba(0,212,255,0.14), rgba(0,212,255,0.02)) !important;
+  border-radius: 12px 12px 0 0;
+  -webkit-backdrop-filter: blur(8px);
+          backdrop-filter: blur(8px);
+}
+
+/* ── Toasts — glass notifications ─────────────────────────────────────── */
+.toast {
+  background: var(--lg-gloss), var(--lg-bg-strong) !important;
+  -webkit-backdrop-filter: blur(24px) saturate(180%) var(--lg-refract);
+          backdrop-filter: blur(24px) saturate(180%) var(--lg-refract);
+  border: 1px solid var(--lg-border) !important;
+  border-radius: 16px !important;
+  box-shadow: var(--lg-float), var(--lg-bevel) !important;
+}
+
+/* ── Table headers translucent so the panel glass reads through ───────── */
+.panel table thead th,
+.panel thead th {
+  background: rgba(255,255,255,0.05) !important;
+  -webkit-backdrop-filter: blur(6px);
+          backdrop-filter: blur(6px);
+  border-bottom: 1px solid var(--lg-border) !important;
+}
+html.light .panel table thead th,
+html.light .panel thead th { background: rgba(31,50,72,0.06) !important; }
+
+/* ── Living specular: a soft light blob drifts across the glass (screen
+      blend = adds light, never hides content). On KPI tiles + pills. ───── */
+.stat-card { position: relative; }
+.stat-card::after,
+.status-pill::after,
+#refresh-btn::after {
+  content: "";
+  position: absolute; inset: -45%;
+  background: radial-gradient(closest-side,
+                rgba(255,255,255,0.18) 0%, rgba(255,255,255,0.05) 45%, transparent 72%);
+  filter: blur(8px);
+  mix-blend-mode: screen;
+  pointer-events: none;
+  animation: lg-drift 9s ease-in-out infinite;
+}
+#refresh-btn::after,
+.status-pill::after { animation-duration: 7s; }
+
+/* A brighter diagonal sweep on hover — the "wet" catch-light */
+.stat-card::before { z-index: 2; }
+.stat-card:hover::after { animation-duration: 3.5s; }
+
+@keyframes lg-drift {
+  0%   { transform: translate(-22%, -14%); }
+  50%  { transform: translate(26%, 18%); }
+  100% { transform: translate(-22%, -14%); }
+}
+
+/* Respect reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  .stat-card::after,
+  .status-pill::after,
+  #refresh-btn::after { animation: none; }
+  .stat-card:hover { transform: none; }
+}
+
+/* ============================================================================
+   HEADER SIZING — give the top bar room to breathe (was 58px / 0 24px, tight)
+   Taller bar + more side padding + looser gaps = a calmer, more presentable
+   top strip. The .tm-wrap height-calc below assumed a 58px header, so it is
+   bumped by the same delta (+16px) to keep the threat map from overflowing.
+   ========================================================================== */
+header {
+  height: 104px !important;
+  padding: 0 34px 0 20px !important;   /* tighter left → logo sits nearer the edge */
+  gap: 20px !important;                /* less space logo→ticker → longer feed */
+}
+.header-right { gap: 18px !important; }
+
+/* Ticker → smooth frosted capsule (was a hard 4px-corner rectangle) */
+.threat-ticker {
+  padding: 11px 22px !important;
+  font-size: 12.5px !important;
+  border-radius: 16px !important;
+  border: 1px solid var(--lg-border) !important;
+  background: var(--lg-gloss), var(--lg-bg) !important;
+  -webkit-backdrop-filter: blur(14px) saturate(170%) var(--lg-refract-s) !important;
+          backdrop-filter: blur(14px) saturate(170%) var(--lg-refract-s) !important;
+  box-shadow: inset 0 1px 0 var(--lg-rim), 0 2px 10px rgba(0,0,0,0.18) !important;
+}
+html.light .threat-ticker {
+  box-shadow: inset 0 1px 0 var(--lg-rim), 0 2px 10px rgba(31,50,72,0.10) !important;
+}
+
+/* Threat-map fills viewport minus chrome; header grew 58→104px (+46) → subtract +46 */
+.tm-wrap { height: calc(100vh - 251px) !important; }
+
+/* ============================================================================
+   BORDER GLOW — cursor-tracking gradient border ring (reactbits <BorderGlow>).
+   A JS handler (ui/border-glow.js) sets --glow-x/--glow-y (pointer position)
+   and --glow-o (0→1, ramps up near the edges) on the hovered card; this ring
+   renders a multi-colour glow (purple→pink→sky) masked to the border only.
+   ========================================================================== */
+.panel, .banner-stat, .banner-reasons { position: relative; }
+
+.bg-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;      /* follow each card's own corner radius */
+  padding: 1.6px;              /* = glow ring thickness */
+  pointer-events: none;
+  z-index: 7;                  /* above the cards' own ::before/::after layers */
+  background: radial-gradient(
+     var(--glow-size, 200px) circle at var(--glow-x, -300px) var(--glow-y, -300px),
+     rgba(192,132,252,0.95) 0%,     /* #c084fc */
+     rgba(244,114,182,0.85) 26%,    /* #f472b6 */
+     rgba(56,189,248,0.70) 50%,     /* #38bdf8 */
+     transparent 68%);
+  /* show only the 1.6px border ring (padding-box excluded from border-box) */
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+          mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  opacity: var(--glow-o, 0);
+  transition: opacity 0.18s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .bg-ring { transition: none; }
+}
+
+/* ============================================================================
+   KPI TILES — GlassIcons-inspired colored frosted-glass cards
+   ---------------------------------------------------------------------------
+   Reproduces the reactbits <GlassIcons> look in vanilla CSS: the joined KPI
+   banner is split into separate tiles, each a vivid colored glass card with a
+   frosted front, a white rim highlight, a colored halo shadow, and a 3D lift on
+   hover. Per-tile colour is carried in --tile (an "r,g,b" triplet).
+   ========================================================================== */
+
+/* The heading strip becomes a standalone bar floating above the tile row */
+.unified-banner-header {
+  border-radius: 14px !important;
+  margin-bottom: 14px !important;
+  border-bottom: 1px solid rgba(155,93,229,0.20) !important;
+}
+
+/* Container: drop the joined-card chrome, add gaps + room for hover lift */
+.unified-banner {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  overflow: visible !important;
+  gap: 13px !important;
+  padding: 4px 2px 8px !important;
+  min-height: 0 !important;
+}
+
+/* Per-colour glass tint (matches each stat's accent colour) */
+.banner-stat.red    { --tile: 255,59,92; }
+.banner-stat.orange { --tile: 255,140,66; }
+.banner-stat.yellow { --tile: 255,209,102; }
+.banner-stat.blue   { --tile: 0,212,255; }
+.banner-stat.green  { --tile: 6,214,160; }
+.banner-stat.purple { --tile: 155,93,229; }
+.banner-stat.red2   { --tile: 255,90,60; }
+
+.banner-stat {
+  border-left: 0 !important;
+  border: 1px solid rgba(255,255,255,0.18) !important;
+  border-radius: 18px !important;
+  padding: 15px 16px 16px !important;
+  /* frosted front over a colored glass fill */
+  background:
+     var(--lg-gloss),
+     linear-gradient(155deg,
+        rgba(var(--tile),0.30) 0%, rgba(var(--tile),0.11) 55%, rgba(var(--tile),0.05) 100%),
+     var(--lg-bg) !important;
+  -webkit-backdrop-filter: blur(16px) saturate(180%) var(--lg-refract-s) !important;
+          backdrop-filter: blur(16px) saturate(180%) var(--lg-refract-s) !important;
+  box-shadow:
+     0 10px 28px rgba(0,0,0,0.30),
+     0 6px 18px rgba(var(--tile),0.16),
+     inset 0 1px 0 var(--lg-rim),
+     inset 0 0 0 1px rgba(255,255,255,0.10) !important;
+  transition: transform 0.28s cubic-bezier(.2,.8,.2,1),
+              box-shadow 0.28s ease, border-color 0.28s ease !important;
+}
+
+/* The GlassIcons lift: rise, grow a touch, deepen the colored halo */
+.banner-stat:hover {
+  transform: translateY(-6px) scale(1.025) !important;
+  border-color: rgba(255,255,255,0.34) !important;
+  box-shadow:
+     0 22px 46px rgba(0,0,0,0.44),
+     0 12px 30px rgba(var(--tile),0.32),
+     inset 0 1px 0 var(--lg-rim),
+     inset 0 0 0 1px rgba(255,255,255,0.16) !important;
+}
+.banner-stat:active { transform: translateY(-3px) scale(1.01) !important; opacity: 1 !important; }
+
+/* The "users at risk" column → neutral glass tile so the row reads as one set */
+.banner-reasons {
+  border-radius: 18px !important;
+  border: 1px solid var(--lg-border) !important;
+  background: var(--lg-gloss), var(--lg-bg) !important;
+  -webkit-backdrop-filter: blur(16px) saturate(180%) var(--lg-refract-s) !important;
+          backdrop-filter: blur(16px) saturate(180%) var(--lg-refract-s) !important;
+  box-shadow: 0 10px 28px rgba(0,0,0,0.30), inset 0 1px 0 var(--lg-rim) !important;
+  padding: 14px 16px !important;
+  overflow: hidden !important;   /* clip contents to the rounded card */
+}
+/* Reason rows fit inside the tile: flexible label (ellipsis), compact bar, so
+   the count number never spills past the rounded edge. (The old joined banner
+   hid this overflow with overflow:hidden; the tile layout exposes it.) */
+.banner-reasons .reason-row   { gap: 6px !important; }
+.banner-reasons .reason-label { width: auto !important; flex: 1 1 auto !important; min-width: 0 !important; }
+.banner-reasons .reason-bar-wrap { flex: 0 0 30px !important; }
+.banner-reasons .reason-count { width: auto !important; min-width: 22px !important; flex: 0 0 auto !important; }
+
+/* Light theme — pastel-tinted glass on a pale surface */
+html.light .banner-stat {
+  border-color: rgba(255,255,255,0.65) !important;
+  box-shadow:
+     0 10px 26px rgba(31,50,72,0.12),
+     0 6px 16px rgba(var(--tile),0.14),
+     inset 0 1px 0 var(--lg-rim) !important;
+}
+html.light .banner-stat:hover {
+  border-color: rgba(255,255,255,0.9) !important;
+  box-shadow:
+     0 18px 40px rgba(31,50,72,0.18),
+     0 12px 26px rgba(var(--tile),0.24),
+     inset 0 1px 0 var(--lg-rim) !important;
+}
+html.light .banner-reasons { border-color: var(--lg-border) !important; }
+
+/* ============================================================================
+   FOOTER — reskinned to the frosted-glass theme (was a light→white gradient
+   plate built for the old dark logo). Now a deep glass strip in dark mode and
+   a frosted-white glass strip in light mode, mirroring the header. Uses the
+   supplied white logo (vglogo_white.png); in light mode the logo is darkened
+   via filter so it stays legible on the pale glass.
+   ========================================================================== */
+footer.site-footer,
+html.light footer.site-footer {
+  background: var(--lg-gloss), var(--lg-bg-strong) !important;
+  -webkit-backdrop-filter: blur(26px) saturate(190%) brightness(1.04) var(--lg-refract-s) !important;
+          backdrop-filter: blur(26px) saturate(190%) brightness(1.04) var(--lg-refract-s) !important;
+  border-top: 1px solid var(--lg-border) !important;
+  box-shadow: 0 -6px 26px rgba(0,0,0,0.32), inset 0 1px 0 var(--lg-rim) !important;
+  color: var(--text) !important;
+}
+html.light footer.site-footer {
+  box-shadow: 0 -6px 22px rgba(31,50,72,0.12), inset 0 1px 0 var(--lg-rim) !important;
+}
+
+/* The white brand logo — as-is on dark glass, darkened for light glass */
+.footer-vgipl-logo {
+  height: 44px !important;
+  filter: drop-shadow(0 1px 3px rgba(0,0,0,0.45)) !important;
+  opacity: 0.96 !important;
+}
+.footer-vgipl-logo:hover { opacity: 1 !important; transform: translateY(-1px) !important; }
+html.light .footer-vgipl-logo {
+  /* white PNG → solid dark mark (alpha preserved) so it reads on pale glass */
+  filter: brightness(0) saturate(100%) opacity(0.78) !important;
+  transform: none !important;
+}
+html.light .footer-vgipl-logo:hover { filter: brightness(0) saturate(100%) opacity(0.92) !important; }
+
+/* Copyright / version / links → theme text tones instead of near-black ink */
+.footer-center  { color: var(--text2) !important; }
+.footer-version { color: var(--text) !important; }
+.footer-link    { color: var(--text2) !important; }
+.footer-link:hover {
+  color: var(--accent) !important;
+  text-decoration: underline !important;
+  text-decoration-color: var(--accent) !important;
+  text-underline-offset: 3px !important;
+}
+.footer-divider { background: var(--lg-border) !important; }
+
+/* Light theme keeps the same tokens (var(--text2)/(--text) resolve to dark ink there) */
+html.light .footer-center,
+html.light .footer-link    { color: var(--text2) !important; }
+html.light .footer-version { color: var(--text) !important; }
+
+/* ============================================================================
+   THEME TOGGLE — day / night switch (was a flat grey slider, looked dull)
+   Dark: night-sky gradient track + faint stars + a glowing moon knob (left).
+   Light: sky-blue gradient track + a warm sun knob (right). Icon + DARK/LIGHT
+   label kept. Sizes bumped, so the light-mode knob travel is overridden too.
+   ========================================================================== */
+.theme-toggle { gap: 8px !important; padding: 6px 13px !important; }
+
+.toggle-track {
+  width: 44px !important;
+  height: 22px !important;
+  border-radius: 999px !important;
+  /* night sky */
+  background: linear-gradient(135deg, #24406e 0%, #0e1830 100%) !important;
+  box-shadow: inset 0 1px 3px rgba(0,0,0,0.50), inset 0 -1px 0 rgba(255,255,255,0.05) !important;
+}
+/* faint stars, only visible at night */
+.toggle-track::before {
+  content: "" !important;
+  position: absolute !important;
+  inset: 0 !important;
+  border-radius: inherit !important;
+  background:
+    radial-gradient(1px 1px at 22% 42%, rgba(255,255,255,0.9), transparent),
+    radial-gradient(1px 1px at 46% 68%, rgba(255,255,255,0.65), transparent),
+    radial-gradient(1.3px 1.3px at 60% 30%, rgba(255,255,255,0.8), transparent) !important;
+  opacity: 1 !important;
+  transition: opacity 0.3s ease !important;
+  pointer-events: none !important;
+}
+html.light .toggle-track {
+  /* daytime sky */
+  background: linear-gradient(135deg, #a6dcff 0%, #4aa6e6 100%) !important;
+  box-shadow: inset 0 1px 3px rgba(31,50,72,0.25), inset 0 -1px 0 rgba(255,255,255,0.35) !important;
+}
+html.light .toggle-track::before { opacity: 0 !important; }  /* no stars in daylight */
+
+/* the knob — moon by night, sun by day */
+.toggle-track::after {
+  width: 18px !important;
+  height: 18px !important;
+  top: 2px !important;
+  left: 2px !important;
+  background: radial-gradient(circle at 34% 30%, #ffffff 0%, #cdd8ea 100%) !important;  /* pale moon */
+  box-shadow: 0 1px 3px rgba(0,0,0,0.45), 0 0 7px rgba(190,214,255,0.55) !important;
+  transition: transform 0.30s cubic-bezier(.2,.8,.2,1), background 0.30s ease, box-shadow 0.30s ease !important;
+}
+html.light .toggle-track::after {
+  transform: translateX(22px) !important;                 /* 44 − 18 − 2·2 */
+  background: radial-gradient(circle at 34% 30%, #fff3c4 0%, #ffcb52 100%) !important;  /* warm sun */
+  box-shadow: 0 1px 3px rgba(120,80,0,0.30), 0 0 9px rgba(255,193,74,0.75) !important;
+}
+
+/* icon gets a subtle glow to match; label a touch crisper */
+.toggle-icon { filter: drop-shadow(0 0 4px rgba(0,212,255,0.35)) !important; }
+html.light .toggle-icon { filter: drop-shadow(0 0 4px rgba(255,193,74,0.55)) !important; }
+.toggle-label { font-weight: 600 !important; letter-spacing: 1.4px !important; }
+
+/* ============================================================================
+   BRAND WORDMARK — top-left lockup (professional, stacked)
+   "CYBERSENTINEL" in a clean condensed bold cap, with the spelled-out product
+   descriptor "USER · ENTITY · BEHAVIOR ANALYTICS" beneath in small muted caps.
+   Flat and restrained: no gradient fill, no glow, no pill. Shadows are for
+   legibility on the frosted header only.
+   ========================================================================== */
+.logo { gap: 15px !important; align-items: center; }
+
+.logo-img {
+  width: 50px !important;
+  height: 50px !important;
+  filter: drop-shadow(0 2px 6px rgba(0,0,0,0.55)) !important;
+}
+
+/* Soft accent keyline sets the wordmark apart from the icon (pro touch, adds
+   presence without any glow). A rounded bar with faded ends — not a hard rule —
+   so it reads smooth. The wrapper <div> holds the two text lines. */
+.logo > div {
+  position: relative !important;
+  padding-left: 15px !important;
+  border-left: 0 !important;
+}
+.logo > div::before {
+  content: "" !important;
+  position: absolute !important;
+  left: 0 !important;
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+  width: 2px !important;
+  height: 62% !important;
+  border-radius: 2px !important;
+  background: linear-gradient(180deg,
+     transparent 0%, rgba(0,212,255,0.75) 28%, rgba(0,212,255,0.75) 72%, transparent 100%) !important;
+}
+html.light .logo > div::before {
+  background: linear-gradient(180deg,
+     transparent 0%, rgba(0,136,187,0.75) 28%, rgba(0,136,187,0.75) 72%, transparent 100%) !important;
+}
+
+.logo-text {
+  font-family: var(--mono) !important;      /* Barlow Condensed */
+  font-weight: 700 !important;
+  font-size: 29px !important;
+  line-height: 1.02 !important;
+  letter-spacing: 4.5px !important;
+  text-indent: 4.5px !important;             /* balance trailing tracking */
+  color: #ffffff !important;
+  background: none !important;
+  -webkit-text-fill-color: currentColor !important;
+  /* dual shadow: tight contrast edge + soft lift off the frosted header */
+  text-shadow: 0 1px 1px rgba(0,0,0,0.55), 0 2px 10px rgba(0,0,0,0.35) !important;
+}
+
+.logo-sub {
+  display: block !important;
+  margin-top: 5px !important;
+  font-family: var(--mono2) !important;      /* IBM Plex Mono */
+  font-weight: 600 !important;
+  font-size: 8.5px !important;
+  line-height: 1 !important;
+  letter-spacing: 1.5px !important;
+  text-indent: 1.5px !important;             /* optically balance trailing tracking */
+  text-transform: uppercase !important;
+  color: #9db8cf !important;                  /* brighter than --text2 for legibility */
+  opacity: 1 !important;
+  /* strip the previous pill treatment */
+  background: none !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+  box-shadow: none !important;
+}
+
+/* Light theme — dark ink, no effects */
+html.light .logo-text {
+  color: #0e1b27 !important;
+  background: none !important;
+  -webkit-text-fill-color: currentColor !important;
+  text-shadow: none !important;
+}
+html.light .logo-sub {
+  color: #47637c !important;
+  background: none !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
