@@ -18,8 +18,10 @@ export function drawGauge(score) {
   const cssH = rect.height || 150;
   canvas.width  = Math.round(cssW * dpr);
   canvas.height = Math.round(cssH * dpr);
-  canvas.style.width  = cssW + "px";
-  canvas.style.height = cssH + "px";
+  // NB: do NOT write canvas.style.width/height here — the CSS (width:100%;
+  // aspect-ratio) already sizes the element. Writing a fixed px back from a
+  // zoom-scaled getBoundingClientRect() creates a feedback loop under CSS
+  // `zoom` that shrinks the gauge on every redraw until it vanishes.
   const ctx = canvas.getContext("2d");
   ctx.scale(dpr, dpr);
 

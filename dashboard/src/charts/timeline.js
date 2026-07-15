@@ -42,8 +42,9 @@ function _render(hoverIdx) {
   const cssH = canvas.offsetHeight || 220;
   canvas.width  = Math.round(cssW * dpr);
   canvas.height = Math.round(cssH * dpr);
-  canvas.style.width  = cssW + "px";
-  canvas.style.height = cssH + "px";
+  // NB: do NOT write canvas.style.width/height — CSS (width:100%;flex:1)
+  // already sizes it. Writing a fixed px back from a zoom-scaled measurement
+  // shrinks the canvas on every redraw under CSS `zoom`.
 
   const ctx = canvas.getContext("2d");
   ctx.setTransform(1, 0, 0, 1, 0, 0);
