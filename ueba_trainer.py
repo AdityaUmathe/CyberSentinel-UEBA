@@ -196,11 +196,14 @@ class AutoencoderTrainer:
         self.device = device
 
     def train(self, dataset: HDF5Dataset,
-              model_name: str = "global") -> tuple[Autoencoder, float]:
+              model_name: str = "global",
+              floor: float = 0.0) -> tuple[Autoencoder, float]:
         """
         Train an autoencoder on the given dataset.
         Returns (trained_model, threshold).
-        threshold = Nth percentile of training reconstruction errors.
+        threshold = Nth percentile of HELD-OUT (validation) reconstruction
+        errors, floored at `floor`. See _compute_threshold_tensor caller below
+        for why held-out (not in-sample) is required to avoid serve-time floods.
         """
         arch_cfg  = self.config["architecture"]
         train_cfg = self.config["training"]
@@ -303,11 +306,28 @@ class AutoencoderTrainer:
         if best_state:
             model.load_state_dict(best_state)
 
-        # Compute anomaly threshold on training data (use in-memory tensor)
-        threshold = self._compute_threshold_tensor(model, train_data)
-        log.info("[%s] Threshold (p%d): %.6f",
+        # Compute the anomaly threshold on the HELD-OUT validation split, NOT the
+        # training data. In-sample recon error is optimistically low (the model
+        # has already seen those rows), so a p95 taken on train_data collapses
+        # toward ~0 for a well-fit or sparse model — and at serve time
+        # deviation_score = recon/(2*threshold) then pins to 1.0, flooding every
+        # event to highly_anomalous (this is exactly what sank every prior weekly
+        # retrain: thresholds ~0.001–0.04 vs a serve recon median ~0.25). Held-out
+        # recon reflects generalisation, i.e. what the live feed actually looks
+        # like, so the threshold stays calibrated run-to-run instead of depending
+        # on how tightly this particular fit memorised its own training set.
+        # Fall back to train_data only when the set is too small to hold out a
+        # validation split (val_size == 0).
+        calib_data = val_data if val_size > 0 else train_data
+        threshold = self._compute_threshold_tensor(model, calib_data)
+        # Floor: a homogeneous entity (few, near-identical events) can be
+        # reconstructed so well that even its held-out recon ≈ 0 → it would still
+        # flood. Never let a threshold collapse below the floor the caller sets.
+        threshold = max(threshold, floor)
+        log.info("[%s] Threshold (p%d, %s): %.6f",
                  model_name,
                  self.config["threshold_percentile"],
+                 "held-out" if val_size > 0 else "in-sample/tiny-set",
                  threshold)
 
         return model, threshold
@@ -476,15 +496,30 @@ class UEBATrainer:
         min_events = self.config["preprocessing"]["min_events_per_user"]
         ae_trainer = AutoencoderTrainer(self.config, self.device)
 
+        # Threshold floors (see AutoencoderTrainer.train). `threshold_floor` is an
+        # absolute minimum; `peruser_floor_frac` keeps every per-user threshold
+        # at >= that fraction of the global threshold so a memorised sparse-entity
+        # model can never collapse to ~0 and flood. Defaults are conservative and
+        # can be tuned in ueba_config.yaml → autoencoder.*.
+        ae_cfg     = self.config["autoencoder"]
+        abs_floor  = float(ae_cfg.get("threshold_floor", 0.05))
+        floor_frac = float(ae_cfg.get("peruser_floor_frac", 0.5))
+
         # ── Global autoencoder (all data) ─────────────────────────────────────
         log.info("Training global autoencoder...")
         global_ds = HDF5Dataset(h5_path, scaler=scaler)
-        global_model, global_threshold = ae_trainer.train(global_ds, "global")
+        global_model, global_threshold = ae_trainer.train(global_ds, "global",
+                                                          floor=abs_floor)
 
         global_path = self.autoencoder_dir / "global.pt"
         torch.save(global_model.state_dict(), str(global_path))
         self.thresholds["global"] = global_threshold
         log.info("Global autoencoder saved → %s", global_path)
+
+        # Per-user threshold floor, derived from the (calibrated) global threshold.
+        peruser_floor = max(abs_floor, floor_frac * global_threshold)
+        log.info("Per-user threshold floor: %.6f (abs %.4f | %.2f x global %.4f)",
+                 peruser_floor, abs_floor, floor_frac, global_threshold)
 
         # ── Per-user autoencoders ─────────────────────────────────────────────
         # Get list of users with enough events from profile store
@@ -569,7 +604,8 @@ class UEBATrainer:
                      user, len(indices))
 
             user_ds = HDF5Dataset(h5_path, indices=indices, scaler=scaler)
-            user_model, user_threshold = ae_trainer.train(user_ds, user)
+            user_model, user_threshold = ae_trainer.train(user_ds, user,
+                                                          floor=peruser_floor)
 
             # Save model — sanitize username for filename
             safe_name = "".join(c if c.isalnum() or c in "-_" else "_"
