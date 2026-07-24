@@ -155,11 +155,17 @@ fi
 # retrain.py APPENDS each week's new events to combined_training.jsonl and never
 # trims it, so it grows unbounded. Keep only events newer than
 # TRAINING_RETENTION_DAYS so features.h5 stays a rolling baseline and disk stays
-# bounded. Runs AFTER the engine restart (zero added downtime) and only when the
-# retrain succeeded. Fully defensive: streams to a temp file, refuses to produce
-# an empty result, verifies the last line is complete JSON, and only THEN swaps —
-# any failure leaves the original combined_training.jsonl untouched.
-if [ "$RETRAIN_OK" = "1" ] && [ -f "$COMBINED" ]; then
+# bounded. Runs AFTER the engine restart (zero added downtime). Fully defensive:
+# streams to a temp file, refuses to produce an empty result, verifies the last
+# line is complete JSON, and only THEN swaps — any failure leaves the original
+# combined_training.jsonl untouched.
+#
+# NOT gated on RETRAIN_OK: combined_training.jsonl is an INPUT, and retrain.py
+# appends this week's events to it BEFORE the validation gate runs. Gating the
+# prune on a successful retrain meant a gate FAIL (2026-07-19) appended a week
+# and never trimmed it — the file regrew 215G→260G. Whether the candidate model
+# promoted has no bearing on which events belong in the rolling window.
+if [ -f "$COMBINED" ]; then
   CUTOFF=$(date -d "${TRAINING_RETENTION_DAYS} days ago" +%Y-%m-%d)
   TMP="${COMBINED}.pruned.$$"
   echo "  Pruning combined_training.jsonl to events >= ${CUTOFF} (${TRAINING_RETENTION_DAYS}d window)..."
