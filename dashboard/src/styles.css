@@ -643,7 +643,7 @@
     align-items: center;
     gap: 16px;
     padding: 0 24px;
-    height: 58px;
+    height: 94px;
     border-bottom: 1px solid rgba(0,212,255,0.12);
     background: linear-gradient(90deg, rgba(4,8,12,0.98) 0%, rgba(9,14,22,0.98) 50%, rgba(4,8,12,0.98) 100%);
     position: sticky;
@@ -687,6 +687,32 @@
   }
   html.light .logo-img {
     filter: drop-shadow(0 0 4px rgba(0, 136, 187, 0.15));
+  }
+
+  /* Full brand lockup (shield + wordmark + tagline), transparent PNG.
+     Sits cleanly on both the dark and light headers.
+     Lighting: a cyan glow lifts it off the near-black dark header; on the light
+     theme a soft dark halo gives the white tagline enough contrast to read. */
+  .logo-lockup {
+    height: 82px;
+    width: auto;
+    display: block;
+    flex-shrink: 0;
+    /* Lighting is theme-reactive and animates when the theme is toggled.
+       DARK (default): a vivid cyan glow so the mark reads as "lit" on the
+       near-black header. */
+    filter: drop-shadow(0 0 18px rgba(0, 212, 255, 0.45))
+            drop-shadow(0 0 6px rgba(0, 212, 255, 0.35));
+    transition: filter 0.35s ease;
+  }
+  html.light .logo-lockup {
+    /* LIGHT: the cyan glow switches off — a soft neutral shadow grounds the
+       mark and gives the white tagline enough edge to read on white. */
+    filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.55))
+            drop-shadow(0 2px 4px rgba(0, 0, 0, 0.30));
+  }
+  @media (max-width: 900px) {
+    .logo-lockup { height: 60px; }
   }
 
   .logo-text {
