@@ -674,6 +674,49 @@
     align-items: center;
     gap: 14px;
     flex-shrink: 0;
+    position: relative; /* anchors the ::after shine overlay */
+    cursor: pointer;    /* the lockup is a home button → Overview */
+    /* The hover lift/scale lives on the container so the logo AND its shine
+       overlay transform together and stay perfectly aligned. */
+    transition: transform 0.35s cubic-bezier(0.2, 0.8, 0.25, 1);
+  }
+  .logo:hover {
+    transform: translateY(-1px) scale(1.035);
+  }
+  /* Specular "shine" that sweeps across the exact logo shape on hover.
+     The overlay is masked by the same PNG so the light band only shows on the
+     logo's opaque pixels; when the band sits off-frame the overlay is invisible,
+     so it naturally rests between sweeps. */
+  .logo::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    -webkit-mask: url(/cybersentinel-ueba-v2.png) no-repeat center / contain;
+            mask: url(/cybersentinel-ueba-v2.png) no-repeat center / contain;
+    background: linear-gradient(105deg,
+                  transparent 38%,
+                  rgba(255, 255, 255, 0.85) 47%,
+                  rgba(180, 240, 255, 0.95) 50%,
+                  rgba(255, 255, 255, 0.85) 53%,
+                  transparent 62%);
+    background-size: 260% 100%;
+    background-position: 200% 0;
+    mix-blend-mode: screen;
+    opacity: 0;
+    will-change: background-position;
+    transition: opacity 0.25s ease;
+  }
+  .logo:hover::after {
+    opacity: 1;
+    /* One continuous, constant-speed pass per cycle: the band enters from the
+       right, crosses the mark, and fully exits left every 3s. No hold frame,
+       so it can never appear to freeze mid-sweep. */
+    animation: logo-shine 3s linear infinite;
+  }
+  @keyframes logo-shine {
+    from { background-position: 200% 0; }
+    to   { background-position: -100% 0; }
   }
 
   .logo-img {
@@ -705,11 +748,24 @@
             drop-shadow(0 0 6px rgba(0, 212, 255, 0.35));
     transition: filter 0.35s ease;
   }
+  /* Hover: the mark "comes alive" — the glow swells and brightens. The lift/
+     scale is on the .logo container (above) so the shine stays aligned. */
+  .logo:hover .logo-lockup {
+    filter: drop-shadow(0 0 26px rgba(0, 212, 255, 0.75))
+            drop-shadow(0 0 10px rgba(0, 212, 255, 0.55))
+            brightness(1.08);
+  }
   html.light .logo-lockup {
     /* LIGHT: the cyan glow switches off — a soft neutral shadow grounds the
        mark and gives the white tagline enough edge to read on white. */
     filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.55))
             drop-shadow(0 2px 4px rgba(0, 0, 0, 0.30));
+  }
+  html.light .logo:hover .logo-lockup {
+    /* LIGHT hover: keep it grounded but let a soft cyan edge bloom in. */
+    filter: drop-shadow(0 0 7px rgba(0, 150, 200, 0.5))
+            drop-shadow(0 2px 5px rgba(0, 0, 0, 0.35))
+            brightness(1.05);
   }
   @media (max-width: 900px) {
     .logo-lockup { height: 60px; }

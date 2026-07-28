@@ -19,6 +19,23 @@ export function initTabs() {
     });
   });
 
+  // ── Brand logo → home (Overview) ──
+  // Clicking the CyberSentinel lockup from anywhere returns to the default tab,
+  // mirroring the "logo is home" convention. Keyboard-accessible too.
+  const logo = document.querySelector(".logo");
+  if (logo) {
+    logo.setAttribute("role", "button");
+    logo.setAttribute("tabindex", "0");
+    logo.setAttribute("title", "Back to Overview");
+    logo.addEventListener("click", () => navigate("overview"));
+    logo.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        navigate("overview");
+      }
+    });
+  }
+
   // ── Banner stat card click → navigate to correct tab/filter ──
   document.querySelectorAll(".banner-stat").forEach((card) => {
     card.addEventListener("click", () => {
