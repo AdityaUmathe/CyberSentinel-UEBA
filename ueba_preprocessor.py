@@ -112,6 +112,21 @@ def safe_bool(val, default: float = 0.0) -> float:
     return default
 
 
+# URL-encoded query strings / paths occasionally leak into subject.name or
+# data.srcuser and would otherwise become junk "user" entities. Real usernames
+# and hosts never contain these characters (DOMAIN\\user, user@dom, host$ are fine).
+_ENTITY_JUNK_CHARS = ("/", "%", "&", "=", "~", "?")
+def _is_url_junk(s: str) -> bool:
+    if not s:
+        return False
+    if len(s) > 64:
+        return True
+    low = s.lower()
+    if "://" in low or low.startswith("www.") or ".php" in low or ".html" in low or ".aspx" in low:
+        return True
+    return any(c in s for c in _ENTITY_JUNK_CHARS)
+
+
 def resolve_entity(log: dict) -> str:
     """Single source of truth for the UEBA entity (user/host/IP) key.
 
@@ -140,6 +155,8 @@ def resolve_entity(log: dict) -> str:
         or get_nested(log, "context.raw_event.data.dstuser")
         or (get_nested(log, "object.name") if is_auth else None)
     )
+    if user and _is_url_junk(user):
+        user = None
     if user:
         return user
     src_ip = (
