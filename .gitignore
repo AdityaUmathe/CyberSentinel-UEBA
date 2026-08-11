@@ -23,3 +23,18 @@ agents.json
 # Screenshots used for issue reports / debugging
 SCR-*.png
 *.screenshot.png
+
+# ── Added 2026-08-11: local backups, transient retrain dirs, scratch ──
+# (models/ and data/features.h5 are intentionally tracked — do NOT ignore those)
+*.bak
+*.bak.*
+*.orig
+.prepare_done
+models_backup_*/
+models_staging/
+vector_db_staging/
+.DS_Store
+Thumbs.db
+*.swp
+*.pptx
+ChatGPT Image*.png
