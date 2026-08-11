@@ -21,6 +21,7 @@ Already-processed files are skipped automatically.
 """
 
 import gzip
+import json
 import logging
 import os
 import shutil
@@ -114,9 +115,18 @@ def shm_free_gb() -> float:
 
 def process_gz(gz_path: Path) -> int:
     """
-    Process one .json.gz through L1 + L2 using /dev/shm as temp space.
-    Appends enriched output to the combined file on disk.
-    Returns number of enriched events appended, or -1 on failure.
+    Append one .json.gz's records to the combined training file.
+
+    The source .gz (box-23 data/enriched/enriched_*.jsonl.gz) are ALREADY enriched
+    — the exact enriched stream the live engine scores. Re-running L1 normalizer +
+    L2 enrich_parallel on already-enriched records STRIPS the enrichment
+    (event_category -> "other", enrich.flags.* -> False, rule.level dropped), which
+    poisons training and guarantees train/serve skew (root-caused 2026-08-10). So we
+    append the enriched records DIRECTLY. A light enrichment-rate sanity check on the
+    head guards against a regressed upstream (e.g. the Jul-2026 enrichment outage that
+    emitted un-enriched records): if the bundle looks un-enriched we SKIP it entirely
+    rather than poison the 30-day rolling corpus. The validation gate is the final
+    backstop that blocks any skewed model from promotion.
     """
     log.info("─" * 55)
     log.info("Processing : %s  (%.0f MB compressed)",
@@ -124,73 +134,52 @@ def process_gz(gz_path: Path) -> int:
     log.info("  /dev/shm free: %.1f GB", shm_free_gb())
     t0 = time.time()
 
+    ENRICH_SANITY_MIN = 0.20   # require >=20% of sampled records to carry enrichment
+    SANITY_SAMPLE     = 5000
+
     tmp = Path(tempfile.mkdtemp(prefix=f"ueba_{gz_path.stem}_", dir=TMP_BASE))
     try:
-        # ── Decompress → /dev/shm ────────────────────────────────────────────
-        raw_json = tmp / "alerts.json"
-        log.info("  [1/3] Decompressing to /dev/shm...")
-        with gzip.open(gz_path, "rb") as fi, open(raw_json, "wb") as fo:
+        # ── Decompress → temp (no L1/L2 — records are already enriched) ───────
+        raw = tmp / "enriched.jsonl"
+        log.info("  [1/2] Decompressing...")
+        with gzip.open(gz_path, "rb") as fi, open(raw, "wb") as fo:
             shutil.copyfileobj(fi, fo)
-        raw_mb = raw_json.stat().st_size / 1024**2
         log.info("        Decompressed: %.0f MB  |  /dev/shm free: %.1f GB",
-                 raw_mb, shm_free_gb())
+                 raw.stat().st_size / 1024**2, shm_free_gb())
 
-        # ── L1: Normalize ─────────────────────────────────────────────────────
-        normalized = tmp / "normalized.jsonl"
-        state_file = tmp / "normalizer.state"
-        log.info("  [2/3] Running L1 normalizer.py...")
-        ok = run_stage([
-            PYTHON,
-            str(PIPELINE_DIR / "normalizer.py"),
-            "--input",          str(raw_json),
-            "--output",         str(normalized),
-            "--state-file",     str(state_file),
-            "--window-minutes", "999999",
-        ])
-        if not ok:
-            raise RuntimeError("L1 normalizer failed")
+        # ── Enrichment sanity check on the head ──────────────────────────────
+        n = e = 0
+        with open(raw, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if n >= SANITY_SAMPLE:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                n += 1
+                try:
+                    d = json.loads(line)
+                    en = d.get("enrich", {}) or {}
+                    flags = en.get("flags", {}) or {}
+                    cat = (en.get("normalization", {}) or {}).get("event_category") \
+                          or d.get("event_category")
+                    if any(bool(v) for v in flags.values()) or (cat and cat != "other"):
+                        e += 1
+                except Exception:
+                    pass
+        rate = (e / n) if n else 0.0
+        log.info("  [2/2] Enrichment sanity: %d/%d (%.0f%%) sampled records enriched",
+                 e, n, 100 * rate)
+        if n and rate < ENRICH_SANITY_MIN:
+            log.error("  ⚠ ENRICHMENT TOO LOW (%.0f%% < %.0f%%) — source looks un-enriched "
+                      "(upstream enrichment outage?). SKIPPING this bundle to protect the "
+                      "rolling corpus. Investigate box-23 enrichment before next retrain.",
+                      100 * rate, 100 * ENRICH_SANITY_MIN)
+            return 0
 
-        raw_json.unlink()
-        n_norm = count_lines(normalized)
-        log.info("        L1 done: %d events  |  /dev/shm free: %.1f GB",
-                 n_norm, shm_free_gb())
-
-        if n_norm == 0:
-            raise RuntimeError("L1 produced 0 events — check alerts.json format")
-
-        # ── L2: Enrich (parallel) ─────────────────────────────────────────────
-        enriched = tmp / "enriched.jsonl"
-        log.info("  [3/3] Running L2 enrich_parallel.py (%d workers)...", N_ENRICH_WORKERS)
-
-        enrich_cmd = [
-            PYTHON,
-            str(Path(__file__).parent / "enrich_parallel.py"),
-            "--input",   str(normalized),
-            "--output",  str(enriched),
-            "--workers", str(N_ENRICH_WORKERS),
-            # Keep the enricher's own chunk scratch on the same disk-backed dir,
-            # not its default /dev/shm — otherwise its 40 chunks + 40 outputs
-            # would stack in RAM on top of our intermediates.
-            "--tmp-dir", str(tmp),
-        ]
-        if GEOIP_DB.exists(): enrich_cmd += ["--geoip-db",     str(GEOIP_DB)]
-        if ASN_DB.exists():   enrich_cmd += ["--asn-db",       str(ASN_DB)]
-        if TOR_LIST.exists(): enrich_cmd += ["--tor-list",      str(TOR_LIST)]
-        if REP_DB.exists():   enrich_cmd += ["--reputation-db", str(REP_DB)]
-
-        ok = run_stage(enrich_cmd)
-        if not ok:
-            raise RuntimeError("L2 enricher failed")
-
-        normalized.unlink()
-        n_enrich = count_lines(enriched)
-        log.info("        L2 done: %d events  |  /dev/shm free: %.1f GB",
-                 n_enrich, shm_free_gb())
-
-        # ── Append to combined file on disk ───────────────────────────────────
-        # Always APPEND — never overwrite. Old days stay in the file.
+        # ── Append enriched records to combined file (never overwrite) ───────
         appended = 0
-        with open(enriched, "r", encoding="utf-8", errors="replace") as src, \
+        with open(raw, "r", encoding="utf-8", errors="replace") as src, \
              open(OUTPUT, "a", encoding="utf-8") as dst:
             for line in src:
                 line = line.strip()
@@ -199,7 +188,7 @@ def process_gz(gz_path: Path) -> int:
                     appended += 1
 
         elapsed = time.time() - t0
-        log.info("  Done: %d events appended | %.0f sec total", appended, elapsed)
+        log.info("  Done: %d records appended | %.0f sec total", appended, elapsed)
         return appended
 
     except Exception as e:
@@ -210,8 +199,7 @@ def process_gz(gz_path: Path) -> int:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
-
+# ──────────────────────────────────────────────────────────────────────────────
 def main():
     # Scratch dir is disk-backed on /data; ensure it exists before any mkdtemp.
     TMP_BASE.mkdir(parents=True, exist_ok=True)
